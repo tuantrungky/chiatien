@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertCircle, KeyRound, Loader2, LogIn, LogOut, ShieldCheck, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { IS_MOCK_MODE } from '../services/api';
@@ -126,6 +127,15 @@ export function EditorLoginButton() {
     logout,
   } = useAuth();
 
+  useEffect(() => {
+    if (!loginModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeLoginModal();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [loginModalOpen, closeLoginModal]);
+
   return (
     <>
       {isEditor && editor ? (
@@ -160,35 +170,38 @@ export function EditorLoginButton() {
         </button>
       )}
 
-      {loginModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={closeLoginModal}
-        >
+      {loginModalOpen &&
+        createPortal(
           <div
-            className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={closeLoginModal}
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Đăng nhập Quản lý (Editor)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Chỉ email có trong tab Editors mới được tạo buổi &amp; gạch nợ.
-                </p>
+            <div
+              className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Đăng nhập Quản lý (Editor)</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Chỉ email có trong tab Editors mới được tạo buổi &amp; gạch nợ.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeLoginModal}
+                  aria-label="Đóng hộp thoại đăng nhập"
+                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={closeLoginModal}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            <GoogleSignInButtonBox />
-          </div>
-        </div>
-      )}
+              <GoogleSignInButtonBox />
+            </div>
+          </div>,
+          document.body
+        )}
     </>
   );
 }

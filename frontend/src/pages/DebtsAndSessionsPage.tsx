@@ -414,7 +414,12 @@ export function DebtsAndSessionsPage({
           </div>
 
           <div className="space-y-3">
-            {filteredSessions.map((s) => {
+            {filteredSessions.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-500">
+                Chưa có buổi chơi nào trong danh sách.
+              </div>
+            ) : (
+              filteredSessions.map((s) => {
               const unpaidList = unpaidBySession.get(s.session_id) || [];
               const isExpanded = expandedSessionId === s.session_id;
               const detail = sessionDetailCache[s.session_id];
@@ -618,7 +623,8 @@ export function DebtsAndSessionsPage({
                   )}
                 </div>
               );
-            })}
+            })
+            )}
           </div>
         </div>
       )}

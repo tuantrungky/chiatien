@@ -272,25 +272,25 @@ export function DashboardPage({
             <h2 className="text-sm font-bold text-slate-900">So sánh chi Cầu lông &amp; Ăn nhậu</h2>
             <p className="text-xs text-slate-500">Theo bộ lọc kỳ đang chọn</p>
           </div>
-          <div className="inline-flex bg-slate-100 p-1 rounded-xl">
+          <div className="inline-flex bg-slate-100 p-1 rounded-xl shrink-0">
             <button
               type="button"
               onClick={() => setChartMode('BAR')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
                 chartMode === 'BAR' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500'
               }`}
             >
-              <BarChart3 className="w-3.5 h-3.5" />
+              <BarChart3 className="w-3.5 h-3.5 shrink-0" />
               <span>Cột</span>
             </button>
             <button
               type="button"
               onClick={() => setChartMode('PIE')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
                 chartMode === 'PIE' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500'
               }`}
             >
-              <PieChartIcon className="w-3.5 h-3.5" />
+              <PieChartIcon className="w-3.5 h-3.5 shrink-0" />
               <span>Tỷ trọng</span>
             </button>
           </div>
