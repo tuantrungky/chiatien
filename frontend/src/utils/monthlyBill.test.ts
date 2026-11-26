@@ -150,5 +150,7 @@ describe('monthlyBill', () => {
     expect(res.perMember).toBe(460000); // ceil((1.000.000 + 840.000) / 4) = 460.000
     expect(tuanDue.netAmount).toBe(0);
     expect(tuanDue.remainingCredit).toBe(380000);
+    expect(res.carryOverCredits).toHaveLength(1);
+    expect(res.carryOverCredits[0].amount).toBe(380000);
   });
 });

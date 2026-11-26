@@ -18,10 +18,11 @@ Dự án xây dựng một Web Application tối ưu cho thiết bị di động
   - Tổng chi phí bàn nhậu bằng tổng các khoản `BILL` và `ITEM` (hoặc tổng hóa đơn nhập tay/AI); chia đều cho những người tham gia; tính `net_amount = per_person - contributed_amount` cho từng người (`> 0` là phải trả thêm, `< 0` là được nhận lại).
   - Thuật toán cấn trừ nợ vòng tròn (**Debt Simplification**) **chỉ chạy nội bộ trong nhóm Ăn nhậu**, không bao giờ trộn lẫn với công nợ Cầu lông.
 - **Tích hợp AI (Gemini):** Bóc tách hóa đơn từ ảnh chụp (lưu ảnh trên Google Drive theo thư mục tháng `YYYY-MM`). Điểm danh sử dụng tick tay trực tiếp + tìm kiếm + thêm nhanh vãng lai (đã lược bỏ giọng nói).
-- **Hiệu năng & Offline-tolerant:** API gộp `getAll` + GAS `CacheService` (5 phút, tự làm mới khi ghi) + cache `localStorage` Stale-While-Revalidate + lưu phiên đăng nhập Editor trong `localStorage` với làm mới token thầm lặng (Google One Tap).
+- **Hiệu năng & Offline-tolerant:** API gộp `getAll` + request-scoped `_SHEET_CACHE_` (đọc mỗi tab Google Sheet đúng 1 lần/request) + cắt gọn `sessions` trả về (6 tháng gần nhất + buổi còn `Attendance` chưa đóng để luôn dưới 95 KB `CacheService`) + cache `localStorage` Stale-While-Revalidate (`cln_swr_v5`) + lưu phiên đăng nhập (`cln_editor_session_v2`, `cln_my_member_id_v1`) với làm mới token thầm lặng (Google One Tap).
+- **Định danh thành viên, Nhắc nợ & Cảnh báo quá hạn:** Thành viên thường cũng có thể đăng nhập Google (`verifyUser`), tự chọn tên mình để lưu `Members.email` (`linkMemberEmail`), lọc `"Chỉ xem của tôi"` hoặc xem `"Cả CLB (nhắc nhau)"` kèm cảnh báo quá hạn theo mốc 10 / 15 / 20 / 30+ ngày (`OverdueBadge`) và nút **Copy tin nhắn Zalo**.
 
 ### 1.2. Nguyên tắc thiết kế cốt lõi
-1. **Viewer Zero-Friction:** Thành viên thường mở link trên điện thoại là xem được ngay tổng quan, lịch cầu lông, lịch sử buổi chơi, công nợ tách riêng Cầu lông / Ăn nhậu, hóa đơn tháng và quét mã **VietQR** — **không cần đăng nhập**.
+1. **Viewer Zero-Friction:** Thành viên thường mở link trên điện thoại là xem được ngay tổng quan, lịch cầu lông, lịch sử buổi chơi, công nợ tách riêng Cầu lông / Ăn nhậu, hóa đơn tháng và quét mã **VietQR** — **không cần đăng nhập**. Khi đăng nhập Google lần đầu (không phải Editor), hệ thống hỏi tên thành viên để liên kết `Members.email`.
 2. **Tách biệt tuyệt đối Cầu lông & Ăn nhậu:** Công nợ Cầu lông (`Monthly_Dues` và phí `GUEST`) luôn chuyển thẳng cho Thủ quỹ (`treasurer_member_id`). Công nợ Ăn nhậu chỉ đối soát chéo giữa các thành viên có phát sinh ăn nhậu.
 3. **Google Sheets làm Database minh bạch (11 Tabs):** Tự động format plain text (`@`) cho các cột ID, ngày, số điện thoại, `bank_bin`, `account_no` để tránh Google Sheets mất số `0` đầu hoặc biến đổi thành số khoa học.
 4. **GAS làm Backend & Security Proxy:** Toàn bộ logic ghi dữ liệu (`LockService`), xác thực Google ID Token, lưu ảnh Drive và gọi Gemini API đều đi qua Google Apps Script (`Code.gs`).
@@ -94,21 +95,22 @@ caulong-nhau/
 
 ## 3. Phân quyền & Bảo mật (AuthN / AuthZ)
 
-### 3.1. Hai vai trò người dùng
+### 3.1. Ba vai trò người dùng
 | Vai trò | Điều kiện truy cập | Quyền hạn |
 | :--- | :--- | :--- |
-| **Viewer** | Không cần đăng nhập | Xem `Tổng quan`, `Lịch` cầu lông & ăn nhậu, `Công nợ` tách riêng Cầu lông / Ăn nhậu + `Lịch sử buổi`, `Tháng cầu` (hóa đơn tháng & thống kê vãng lai), mở **VietQR**. |
-| **Editor** | Đăng nhập Google + email nằm trong tab `Editors` (`is_active = TRUE`) | Toàn bộ quyền Viewer + Tạo/Sửa/Xóa buổi (`BADMINTON`, `DRINKING`), Chụp ảnh hóa đơn AI, Lập/Sửa lịch tháng (`Schedule`), Phát hành/Chốt hóa đơn tháng (`Monthly_Bills`), Xác nhận thanh toán, Quản lý `Members` và `Settings`. |
+| **Viewer** | Không cần đăng nhập | Xem `Tổng quan`, `Lịch` cầu lông & ăn nhậu, `Công nợ` tách riêng Cầu lông / Ăn nhậu + cảnh báo quá hạn + `Lịch sử buổi`, `Tháng cầu` (hóa đơn tháng & thống kê vãng lai), lọc `"Tôi là ai?"` (`localStorage`), Copy tin nhắn Zalo, mở **VietQR**. |
+| **Member** | Đăng nhập Google (`verifyUser` trả `role = MEMBER`, `isEditor = false`) | Toàn bộ quyền Viewer + tự liên kết `Members.email` trên Google Sheet qua `MemberIdentityModal` (`linkMemberEmail`) để đồng bộ tên thành viên trên mọi thiết bị. |
+| **Editor** | Đăng nhập Google + email nằm trong tab `Editors` (`is_active = TRUE`) | Toàn bộ quyền Viewer + Tạo/Sửa/Xóa buổi (`BADMINTON`, `DRINKING`), Chụp ảnh hóa đơn AI, Lập/Sửa lịch tháng (`Schedule`), Phát hành/Chốt hóa đơn tháng (`Monthly_Bills`), Xác nhận & Hoàn tác gạch nợ (`undoSettlement`), Quản lý `Members` và `Settings`. |
 
 > **Phân cấp nội bộ trong tab `Editors`:**
 > - `EDITOR`: Toàn quyền nghiệp vụ (buổi chơi, lịch, hóa đơn tháng, công nợ, thành viên, cài đặt).
 > - `ADMIN`: Toàn quyền `EDITOR` + quản lý danh sách `Editors` (`manageEditors`).
 
 ### 3.2. Luồng xác thực Google ID Token & Lưu phiên `localStorage`
-1. Frontend lưu phiên tại `localStorage` (`cln_editor_session_v2`, `cln_editor_profile_v2`) để người dùng đóng/mở lại trình duyệt trên điện thoại vẫn giữ trạng thái đăng nhập nhanh.
+1. Frontend lưu phiên tại `localStorage` (`cln_editor_session_v2`, `cln_editor_profile_v2`, `cln_my_member_id_v1`) để người dùng đóng/mở lại trình duyệt trên điện thoại vẫn giữ trạng thái đăng nhập nhanh.
 2. Khi token sắp hết hạn hoặc API trả `UNAUTHORIZED`, Frontend tự thử làm mới thầm lặng qua Google Identity Services (`auto_select: true` / One Tap). Nếu không thể làm mới thầm lặng, mở `ReauthModal` để đăng nhập lại 1 chạm mà **không xóa dữ liệu form đang nhập**.
-3. Backend `AuthService.gs` kiểm tra `idToken` qua `tokeninfo`, xác minh `aud`, `email_verified`, `exp`, đối chiếu `email` trong tab `Editors` (`is_active = TRUE`), và bọc mọi thao tác ghi trong `LockService.getScriptLock().waitLock(10000)`.
-4. Sau mỗi thao tác ghi thành công, Backend gọi `bumpCacheVersion_()` để vô hiệu cache `getAll` ngay lập tức.
+3. Backend `AuthService.gs` kiểm tra `idToken` qua `tokeninfo` (`verifyGoogleJwt_` / `verifyUserToken`), xác minh `aud`, `email_verified`, `exp`, đối chiếu `email` trong tab `Editors` (`is_active = TRUE`) hoặc tìm `linkedMemberId` qua `Members.email`; mọi hành động ghi admin/editor đều kiểm tra `if (!auth.isEditor)` (`403 FORBIDDEN`) và bọc trong `LockService.getScriptLock().waitLock(10000)`.
+4. Sau mỗi thao tác ghi thành công, Backend gọi `bumpCacheVersion_()` và `invalidateSheetCache_()` để vô hiệu cache ngay lập tức.
 
 ---
 
@@ -139,14 +141,14 @@ caulong-nhau/
        $$\text{grossToDistribute} = \max(0, \text{estimate} + \text{appliedCreditsTotal} - \text{carry\_in})$$
        $$\text{per\_member} = \text{Math.ceil}\left(\frac{\text{grossToDistribute}}{\text{member\_count} \times \text{unit}}\right) \times \text{unit}$$
        $$\text{netDue}[m] = \max(0, \text{per\_member} - \text{creditAmount}[m])$$
-     - `billed_total = sum(netDue[m])` (tổng tiền mặt thực thu về tay Thủ quỹ), đảm bảo tổng thu từ thành viên khớp với số tiền cần trả chủ sân (`to_collect = max(0, estimate - carry_in)`).
-     - Sinh các dòng trong `Monthly_Dues` với `amount = netDue`, `base_amount = per_member`, `credit_amount`, `credit_note` (tự động `is_paid = TRUE` nếu `netDue === 0`).
+     - `billed_total = sum(netDue[m])` (tổng tiền mặt thực thu về tay Thủ quỹ), và phần dư khi `credit_amount > per_member` (`remainingCredit`) được tự động lưu vào `Monthly_Bills.carry_over_credits` để gộp sang tháng tiếp theo trừ tiếp.
+     - Sinh các dòng trong `Monthly_Dues` với `amount = netDue`, `base_amount = per_member`, `credit_amount`, `credit_note`, `issued_at` (tự động `is_paid = TRUE` nếu `netDue === 0`).
 2. **Khách vãng lai (`GUEST`) đi đánh Cầu lông:**
    - Khi điểm danh buổi `BADMINTON`, thành viên `MAIN` có `fee_amount = 0`, `is_paid = TRUE`.
    - Thành viên `GUEST` có `fee_amount = session.guest_fee`, `creditor_id = treasurer_member_id`, `net_amount = fee_amount` (hoặc `0` nếu tích *"Đã đóng ngay"*).
    - Toàn bộ tiền vãng lai đã thu trong tháng cộng vào `guest_income` của tháng đó.
-3. **Chốt tháng (`closeMonth`):**
-   - `actual_cost`: Tổng `Sessions.total_amount` của các buổi `BADMINTON` trong tháng (hoặc giá trị `actual_cost_override` nếu Thủ quỹ nhập tay theo hóa đơn thực tế trả chủ sân).
+3. **Chốt tháng & Dự kiến đầu tháng (`closeMonth`):**
+   - `actual_cost`: Khi tháng đang `OPEN`, chưa nhập `actual_cost_override` và tổng các buổi đã nhập (`logged_sessions_cost`) nhỏ hơn `estimate` chủ sân, hệ thống tạm dùng `estimate` (`is_projected_cost = true`) để tránh dư ảo đầu tháng; khi đã ghi đủ buổi hoặc chốt tháng (`actual_cost_override`), dùng chi phí thực tế.
    - **Số dư chuyển sang tháng sau (`carry_out`):**
      $$\text{carry\_out} = \text{carry\_in} + \text{billed\_total} + \text{guest\_income} - \text{actual\_cost}$$
    - Số `carry_out` này sẽ tự động trở thành `carry_in` của tháng tiếp theo, giúp tiền vãng lai và phần dư/thiếu tháng trước tự động bù trừ công bằng vào tiền mỗi người phải đóng tháng sau.
@@ -210,7 +212,7 @@ Quy ước chung:
 - Toàn bộ cột ID, ngày `YYYY-MM-DD`, tháng `YYYY-MM`, `phone`, `bank_bin`, `account_no` được hàm `setupDatabase()` đặt định dạng plain text (`@`) và đọc qua `normalizeCellValue_()` để không bao giờ bị mất số `0` đầu hay chuyển thành số khoa học (`E+`).
 
 ### 6.1. Tab `Members`
-`member_id`, `name`, `aliases`, `type` (`MAIN` | `GUEST`), `phone`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active`, `created_at`, `updated_at`
+`member_id`, `name`, `aliases`, `type` (`MAIN` | `GUEST`), `phone`, `email`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active`, `created_at`, `updated_at`
 
 ### 6.2. Tab `Sessions`
 `session_id`, `date`, `type` (`BADMINTON` | `DRINKING`), `title`, `total_amount`, `guest_fee`, `payer_id`, `per_person_amount`, `attendee_count`, `receipt_drive_id`, `receipt_url`, `receipt_summary`, `note`, `court_amount`, `shuttle_qty`, `shuttle_amount`, `other_amount`, `cost_detail` (JSON), `venue_type` (`RESTAURANT` | `HOME` | `""`), `plan_id`, `billing_mode` (`MONTHLY` | `AD_HOC` | `""`), `created_by`, `created_at`, `updated_at`
@@ -225,10 +227,10 @@ Quy ước chung:
 `plan_id`, `date` (`YYYY-MM-DD`), `start_time` (`HH:mm`), `end_time` (`HH:mm`), `courts`, `planned_member_ids` (comma-separated), `status` (`PLANNED` | `DONE` | `CANCELLED`), `session_id`, `note`, `created_at`, `updated_at`
 
 ### 6.6. Tab `Monthly_Bills` (Hóa đơn Cầu lông hàng tháng)
-`month` (`YYYY-MM`), `estimate`, `carry_in`, `to_collect`, `member_count`, `per_member`, `billed_total`, `actual_cost`, `actual_cost_override`, `guest_income`, `carry_out`, `status` (`OPEN` | `CLOSED`), `created_by`, `closed_at`, `updated_at`, `court_fee`, `shuttle_tube_qty`, `shuttle_tube_price`, `shuttle_tube_amount`, `prev_overtime_fee`, `bill_detail` (JSON), `shuttle_contributions` (JSON), `applied_credits_total`
+`month` (`YYYY-MM`), `estimate`, `carry_in`, `to_collect`, `member_count`, `per_member`, `billed_total`, `actual_cost`, `actual_cost_override`, `guest_income`, `carry_out`, `status` (`OPEN` | `CLOSED`), `created_by`, `closed_at`, `updated_at`, `court_fee`, `shuttle_tube_qty`, `shuttle_tube_price`, `shuttle_tube_amount`, `prev_overtime_fee`, `bill_detail` (JSON), `shuttle_contributions` (JSON), `applied_credits_total`, `carry_over_credits` (JSON)
 
 ### 6.7. Tab `Monthly_Dues` (Khoản đóng tiền cầu theo tháng của từng `MAIN`)
-`due_id`, `month` (`YYYY-MM`), `member_id`, `amount`, `is_paid`, `paid_at`, `confirmed_by`, `base_amount`, `credit_amount`, `credit_note`
+`due_id`, `month` (`YYYY-MM`), `member_id`, `amount`, `is_paid`, `paid_at`, `confirmed_by`, `base_amount`, `credit_amount`, `credit_note`, `issued_at`
 
 ### 6.8. Tab `Settlements` (Lịch sử gạch nợ)
 `settlement_id`, `from_member_id`, `to_member_id`, `amount`, `settled_at`, `method`, `category` (`BADMINTON` | `DRINKING`), `source_attendance_ids`, `source_ledger_ids`, `is_reconciled`, `transfer_content`, `note`, `confirmed_by`
@@ -265,9 +267,9 @@ Cấu hình các khóa mặc định:
   - `getAll&periodType=MONTH&refDate=...&month=YYYY-MM`: **Endpoint gộp chính**, trả về `{ bootstrap, dashboard, sessions, debts, schedule, monthlyBill, guestStats }`, được cache trong `CacheService` 300 giây theo version.
   - Các endpoint lẻ vẫn giữ để tương thích / tải chi tiết: `bootstrap`, `getDashboard`, `getMembers`, `getSessions`, `getSessionDetail`, `getSettings`, `getGuestStats`, `getDebts`, `getSchedule`, `getMonthlyBill`.
 - **Write / Auth / AI (`POST` với `Content-Type: text/plain;charset=utf-8`, body `{ action, idToken, payload }`):**
-  - Auth & Editors: `verifyEditor`, `getEditors`, `manageEditors` (`ADMIN`).
+  - Auth & Editors: `verifyUser` (alias `verifyEditor`), `linkMemberEmail` (mọi user đã đăng nhập Google), `getEditors`, `manageEditors` (`ADMIN`).
   - Buổi chơi: `createSession`, `updateSession`, `deleteSession`.
-  - Thanh toán: `confirmPayment` (alias `confirmSettlement`).
+  - Thanh toán: `confirmPayment` (alias `confirmSettlement`), `undoSettlement`.
   - Lịch tháng: `generateSchedule`, `updateScheduleDay`.
   - Hóa đơn Cầu lông tháng: `issueMonthlyBill`, `saveMonthlyContributions`, `markDuePaid`, `closeMonth`.
   - Thành viên & Cài đặt: `upsertMember`, `updateSettings`.
@@ -275,13 +277,21 @@ Cấu hình các khóa mặc định:
 
 ---
 
-## 8. Cấu trúc màn hình (Mobile-first UI)
+## 8. Cấu trúc màn hình & Quy tắc cảnh báo quá hạn (Mobile-first UI + React Router)
 
+### 8.1. Cảnh báo quá hạn (`utils/overdue.ts` & `OverdueBadge`)
+- Mốc tính từ `issued_at` (hóa đơn tháng) hoặc `session_date` (vãng lai / phát sinh / buổi nhậu lâu nhất chưa thanh toán):
+  - `10–14 ngày`: Badge vàng (`⏰ Quá X ngày`).
+  - `15–19 ngày`: Badge cam + viền nổi bật (`⚠️ Quá X ngày`).
+  - `20–29 ngày`: Badge đỏ nhấp nháy `animate-pulse` (`🔥 Quá X ngày`).
+  - `>= 30 ngày`: Badge đỏ thẫm nhấp nháy `animate-pulse` (`🚨 Quá 1 tháng (X ngày)`).
+
+### 8.2. Các Route màn hình (`react-router-dom`)
 | Route / Tab | Vai trò xem | Chức năng chính |
 | :--- | :--- | :--- |
-| `/` (**Tổng quan**) | Viewer & Editor | Thanh thao tác nhanh Editor (`+ Thêm buổi Cầu lông` / `+ Thêm buổi Ăn nhậu`); 4 thẻ KPI (`Chi Cầu lông`, `Chi Ăn nhậu`, `Bù trừ Cầu tháng` kèm nút xem công thức giải thích, `Nợ chưa thu`); Tiến độ đóng tiền Cầu tháng & Lịch đánh sắp tới; Chuyển khoản Cầu lông & Ăn nhậu kèm VietQR; Biểu đồ & 5 buổi gần nhất. |
-| `/calendar` (**Lịch**) | Viewer & Editor | Lịch tháng hiển thị ngày đánh cầu (`Schedule`), buổi cầu lông cố định/phát sinh & ăn nhậu; Editor lập lịch tháng, thêm/hủy ngày, bấm **"Điểm danh & Ghi buổi"** hoặc **"+ Buổi cầu phát sinh"** mở nhanh form tạo buổi. |
-| `/debts` (**Công nợ**) | Viewer & Editor | Tab `1. Tiền Cầu lông` (Tháng cầu `MAIN` + Vãng lai chưa đóng -> VietQR thẳng Thủ quỹ) & `2. Tiền Ăn nhậu` (Chuyển khoản tối ưu nội bộ + breakdown từng buổi + VietQR); Tab `Lịch sử buổi` hiển thị chi tiết sân/cầu/góp món & ảnh hóa đơn Drive. |
-| `/monthly-badminton` (**Tháng cầu**) | Viewer & Editor | Công thức minh bạch `Ước tính − Dư T.trước = Cần thu`, số dư thực tế chuyển T.sau; Danh sách thành viên `MAIN` đóng tiền cầu tháng kèm VietQR & đánh dấu đã đóng; Tab thống kê `Vãng lai theo tháng`. |
-| `/create-session` | Editor | Tạo/Sửa buổi `BADMINTON` (nhiều dòng sân + **Sân thêm giờ**, cầu, chi phí khác, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI; Tick tay + tìm kiếm + thêm nhanh vãng lai. |
-| `/settings` | Editor | Cấu hình `Settings` (giá sân/giờ, giá quả cầu, số sân/giờ mặc định, phí vãng lai, Thủ quỹ), quản lý `Members` và `Editors` (`ADMIN`). |
+| `/` (**Tổng quan**) | Viewer, Member, Editor | Thanh thao tác nhanh Editor (`+ Thêm buổi Cầu lông` / `+ Thêm buổi Ăn nhậu`); 4 thẻ KPI (`Chi Cầu lông`, `Chi Ăn nhậu`, `Bù trừ Cầu tháng` kèm nút xem công thức giải thích, `Nợ chưa thu`); Bộ lọc `"Tôi là ai?"` + `"Chỉ xem của tôi"` / `"Cả CLB (nhắc nhau)"`; Cảnh báo quá hạn & VietQR; Biểu đồ & 5 buổi gần nhất. |
+| `/calendar` (**Lịch**) | Viewer, Member, Editor | Lịch tháng hiển thị ngày đánh cầu (`Schedule`), buổi cầu lông cố định/phát sinh & ăn nhậu; Editor lập lịch tháng, thêm/hủy ngày, bấm **"Điểm danh & Ghi buổi"** hoặc **"+ Buổi cầu phát sinh"** mở nhanh form tạo buổi. |
+| `/debts` (**Công nợ**) | Viewer, Member, Editor | Bộ lọc `"Tôi là ai?"` + `"Copy tin nhắn nhắc nợ Zalo"`; Tab `1. Tiền Cầu lông` (Tháng cầu `MAIN`, Phát sinh & Vãng lai -> VietQR) & `2. Tiền Ăn nhậu` (Chuyển khoản tối ưu nội bộ + breakdown từng buổi + VietQR); Lịch sử đã thu kèm nút **Hoàn tác** (`undoSettlement`); Tab `Lịch sử buổi`. |
+| `/monthly` (**Tháng cầu**) | Viewer, Member, Editor | Công thức minh bạch, nút **Copy báo thu Zalo**, góp ống cầu trong tháng, danh sách `MAIN` kèm cảnh báo quá hạn & VietQR; Tab thống kê `Vãng lai theo tháng`. |
+| `/create` (**Ghi buổi**) | Editor | Tạo/Sửa buổi `BADMINTON` (nhiều dòng sân + **Sân thêm giờ**, cầu, chi phí khác, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI dùng chung cho cả 2 loại buổi; Tick tay + tìm kiếm + thêm nhanh vãng lai. |
+| `/settings` (**Cài đặt**) | Editor | Cấu hình `Settings` (giá sân/giờ, giá quả cầu, số sân/giờ mặc định, phí vãng lai, Thủ quỹ), quản lý `Members` và `Editors` (`ADMIN`). |

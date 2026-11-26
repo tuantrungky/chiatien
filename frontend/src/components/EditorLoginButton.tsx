@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, KeyRound, Loader2, LogIn, LogOut, ShieldCheck, X } from 'lucide-react';
+import { AlertCircle, KeyRound, Loader2, LogIn, LogOut, ShieldCheck, UserCheck, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { IS_MOCK_MODE } from '../services/api';
 
@@ -33,7 +33,7 @@ declare global {
 
 export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void }) {
   const btnRef = useRef<HTMLDivElement | null>(null);
-  const { loginWithIdToken, loginMockEditor, authLoading, authError } = useAuth();
+  const { loginWithIdToken, loginMockEditor, loginMockMember, authLoading, authError } = useAuth();
   const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
   const hasRealClientId = Boolean(clientId && !clientId.includes('YOUR_GOOGLE_CLIENT_ID'));
 
@@ -106,17 +106,30 @@ export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void })
           )}
 
           {IS_MOCK_MODE && (
-            <button
-              type="button"
-              onClick={async () => {
-                const ok = await loginMockEditor();
-                if (ok && onSuccess) onSuccess();
-              }}
-              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs transition cursor-pointer"
-            >
-              <KeyRound className="w-4 h-4" />
-              <span>Đăng nhập Demo (Mock Admin)</span>
-            </button>
+            <div className="w-full space-y-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await loginMockEditor();
+                  if (ok && onSuccess) onSuccess();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs transition cursor-pointer"
+              >
+                <KeyRound className="w-4 h-4" />
+                <span>Đăng nhập Demo (Mock Admin)</span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await loginMockMember();
+                  if (ok && onSuccess) onSuccess();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 py-2 px-4 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs font-semibold transition cursor-pointer"
+              >
+                <UserCheck className="w-4 h-4" />
+                <span>Đăng nhập Demo (Thành viên)</span>
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -127,6 +140,7 @@ export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void })
 export function EditorLoginButton() {
   const {
     editor,
+    isLoggedIn,
     isEditor,
     loginModalOpen,
     openLoginModal,
@@ -145,21 +159,33 @@ export function EditorLoginButton() {
 
   return (
     <>
-      {isEditor && editor ? (
+      {isLoggedIn && editor ? (
         <div className="flex items-center gap-1.5">
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="font-semibold text-emerald-800 max-w-[110px] truncate">
-              {editor.name}
-            </span>
-            <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-600 text-white">
-              {editor.role}
-            </span>
-          </div>
+          {isEditor ? (
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="font-semibold text-emerald-800 max-w-[110px] truncate">
+                {editor.name}
+              </span>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-600 text-white">
+                {editor.role}
+              </span>
+            </div>
+          ) : (
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-xs">
+              <UserCheck className="w-3.5 h-3.5 text-sky-600" />
+              <span className="font-semibold text-sky-900 max-w-[110px] truncate">
+                {editor.name}
+              </span>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-sky-600 text-white">
+                Thành viên
+              </span>
+            </div>
+          )}
           <button
             type="button"
             onClick={logout}
-            title="Đăng xuất Editor"
+            title="Đăng xuất"
             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 transition cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -173,7 +199,7 @@ export function EditorLoginButton() {
           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 active:scale-[0.98] transition cursor-pointer shrink-0"
         >
           <LogIn className="w-3.5 h-3.5" />
-          <span>Đăng nhập Editor</span>
+          <span>Đăng nhập</span>
         </button>
       )}
 
@@ -189,9 +215,9 @@ export function EditorLoginButton() {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Đăng nhập Quản lý (Editor)</h3>
+                  <h3 className="text-base font-bold text-slate-900">Đăng nhập Google</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Phiên đăng nhập lưu trên trình duyệt để thao tác nhanh.
+                    Thành viên đăng nhập để tự lưu tên &amp; xem nợ nhanh; Thủ quỹ / Editor để ghi buổi &amp; gạch nợ.
                   </p>
                 </div>
                 <button

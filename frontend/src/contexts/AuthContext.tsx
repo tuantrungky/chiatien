@@ -1,17 +1,24 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ApiClientError, IS_MOCK_MODE, verifyEditor } from '../services/api';
+import { ApiClientError, IS_MOCK_MODE, linkMemberEmail, verifyEditor } from '../services/api';
 import type { EditorSessionState, VerifyEditorResponse } from '../types';
 import { useToast } from './ToastContext';
 
 const STORAGE_KEY = 'cln_editor_session_v2';
 const PROFILE_KEY = 'cln_editor_profile_v2';
+const MY_MEMBER_KEY = 'cln_my_member_id_v1';
 
 interface AuthContextValue {
   editor: VerifyEditorResponse | null;
   idToken: string | null;
   exp: number | null;
+  isLoggedIn: boolean;
   isEditor: boolean;
   isAdmin: boolean;
+  myMemberId: string | null;
+  setMyMemberId: (memberId: string | null) => void;
+  needsMemberLink: boolean;
+  dismissMemberLinkPrompt: () => void;
+  linkMyMember: (memberId: string) => Promise<boolean>;
   loginModalOpen: boolean;
   reauthRequired: boolean;
   authLoading: boolean;
@@ -20,6 +27,7 @@ interface AuthContextValue {
   closeLoginModal: () => void;
   loginWithIdToken: (credential: string, silent?: boolean) => Promise<boolean>;
   loginMockEditor: () => Promise<boolean>;
+  loginMockMember: () => Promise<boolean>;
   logout: () => void;
   handleApiError: (err: unknown) => string;
   clearAuthError: () => void;
@@ -70,14 +78,36 @@ function hasSavedProfile(): boolean {
   }
 }
 
+function readStoredMemberId(): string | null {
+  try {
+    return localStorage.getItem(MY_MEMBER_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const [session, setSession] = useState<EditorSessionState | null>(() => readStoredSession());
+  const [myMemberId, setMyMemberIdState] = useState<string | null>(
+    () => readStoredSession()?.editor?.linkedMemberId || readStoredMemberId()
+  );
+  const [dismissedMemberLink, setDismissedMemberLink] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [reauthRequired, setReauthRequired] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const silentPromptAttempted = useRef(false);
+
+  const setMyMemberId = useCallback((memberId: string | null) => {
+    setMyMemberIdState(memberId);
+    try {
+      if (memberId) localStorage.setItem(MY_MEMBER_KEY, memberId);
+      else localStorage.removeItem(MY_MEMBER_KEY);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, []);
 
   const loginWithIdToken = useCallback(
     async (credential: string, silent = false): Promise<boolean> => {
@@ -86,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const verified = await verifyEditor(credential);
         if (!verified.authorized) {
-          setAuthError('Tài khoản Google này không có quyền Editor.');
+          setAuthError('Xác thực tài khoản Google thất bại.');
           return false;
         }
         const exp = decodeJwtExp(credential);
@@ -98,14 +128,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
         localStorage.setItem(PROFILE_KEY, JSON.stringify(verified));
         setSession(next);
+        setDismissedMemberLink(false);
+        if (verified.linkedMemberId) {
+          setMyMemberId(verified.linkedMemberId);
+        }
         setLoginModalOpen(false);
         setReauthRequired(false);
+        const verifiedIsEditor = Boolean(
+          verified.isEditor ?? (verified.role === 'ADMIN' || verified.role === 'EDITOR')
+        );
         if (!silent) {
-          toast.success(`Đã đăng nhập Editor (${verified.name})`);
+          toast.success(
+            verifiedIsEditor
+              ? `Đã đăng nhập Editor (${verified.name})`
+              : `Đã đăng nhập Thành viên (${verified.name})`
+          );
         }
         return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Xác thực Editor thất bại.';
+        const msg = err instanceof Error ? err.message : 'Xác thực tài khoản thất bại.';
         setAuthError(msg);
         if (!silent) toast.error(msg);
         return false;
@@ -113,7 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       }
     },
-    [toast]
+    [toast, setMyMemberId]
   );
 
   // Thử làm mới token im lặng qua Google One Tap auto_select khi hồ sơ Editor còn lưu trong localStorage
@@ -188,10 +229,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return loginWithIdToken('MOCK_ADMIN_ID_TOKEN');
   }, [loginWithIdToken]);
 
+  const loginMockMember = useCallback(async (): Promise<boolean> => {
+    if (!IS_MOCK_MODE) return false;
+    return loginWithIdToken('MOCK_MEMBER_ID_TOKEN');
+  }, [loginWithIdToken]);
+
+  const linkMyMember = useCallback(
+    async (memberId: string): Promise<boolean> => {
+      if (!session?.idToken) return false;
+      try {
+        const res = await linkMemberEmail(session.idToken, memberId);
+        const updatedEditor: VerifyEditorResponse = {
+          ...session.editor,
+          linkedMemberId: res.linkedMemberId,
+        };
+        const updatedSession: EditorSessionState = {
+          ...session,
+          editor: updatedEditor,
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSession));
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(updatedEditor));
+        setSession(updatedSession);
+        setMyMemberId(res.linkedMemberId);
+        setDismissedMemberLink(false);
+        toast.success('Đã liên kết tên thành viên với tài khoản Google.');
+        return true;
+      } catch (err) {
+        if (err instanceof ApiClientError) {
+          toast.error(err.message);
+        } else {
+          toast.error('Không thể liên kết thành viên.');
+        }
+        return false;
+      }
+    },
+    [session, setMyMemberId, toast]
+  );
+
+  const dismissMemberLinkPrompt = useCallback(() => {
+    setDismissedMemberLink(true);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(PROFILE_KEY);
     setSession(null);
+    setDismissedMemberLink(false);
     setReauthRequired(false);
     setAuthError(null);
     toast.info('Đã chuyển về chế độ Viewer.');
@@ -234,6 +317,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
+  const isLoggedIn = Boolean(session?.editor && session?.idToken);
+  const isEditor = Boolean(
+    session?.editor &&
+      session?.idToken &&
+      (session.editor.isEditor ?? (session.editor.role === 'ADMIN' || session.editor.role === 'EDITOR'))
+  );
+  const needsMemberLink = Boolean(
+    isLoggedIn && !isEditor && !session?.editor?.linkedMemberId && !dismissedMemberLink
+  );
 
   return (
     <AuthContext.Provider
@@ -241,8 +333,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         editor: session?.editor ?? null,
         idToken: session?.idToken ?? null,
         exp: session?.exp ?? null,
-        isEditor: Boolean(session?.editor && session?.idToken),
+        isLoggedIn,
+        isEditor,
         isAdmin: session?.editor?.role === 'ADMIN',
+        myMemberId,
+        setMyMemberId,
+        needsMemberLink,
+        dismissMemberLinkPrompt,
+        linkMyMember,
         loginModalOpen,
         reauthRequired,
         authLoading,
@@ -251,6 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         closeLoginModal,
         loginWithIdToken,
         loginMockEditor,
+        loginMockMember,
         logout,
         handleApiError,
         clearAuthError,

@@ -94,7 +94,7 @@ export function Layout({
   outstandingCount,
   children,
 }: LayoutProps) {
-  const { isEditor } = useAuth();
+  const { isEditor, isLoggedIn } = useAuth();
   const [fabOpen, setFabOpen] = useState(false);
   const navItems = ALL_NAV_ITEMS.filter((item) => !item.editorOnly || isEditor);
 
@@ -125,7 +125,7 @@ export function Layout({
             <div className="flex items-center gap-1.5 mt-1">
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-100 bg-white/15 px-1.5 py-0.5 rounded">
                 <ShieldCheck className="w-3 h-3 text-emerald-300" />
-                {isEditor ? 'Editor Mode' : 'Viewer'}
+                {isEditor ? 'Editor Mode' : isLoggedIn ? 'Thành viên' : 'Viewer'}
               </span>
               {IS_MOCK_MODE && (
                 <span className="text-[10px] font-semibold text-amber-900 bg-amber-300 px-1.5 py-0.5 rounded">

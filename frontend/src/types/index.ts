@@ -10,7 +10,7 @@ export type SessionItemKind = 'BILL' | 'ITEM';
 export type ScheduleStatus = 'PLANNED' | 'DONE' | 'CANCELLED';
 export type MonthlyBillStatus = 'OPEN' | 'CLOSED';
 export type PaymentMethod = 'VIETQR' | 'CASH' | 'BANK_TRANSFER';
-export type EditorRole = 'ADMIN' | 'EDITOR';
+export type EditorRole = 'ADMIN' | 'EDITOR' | 'MEMBER';
 export type PeriodType = 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR' | 'ALL';
 
 // Giữ các type FundLedger để đọc dữ liệu lịch sử (không tham gia tính công nợ mới)
@@ -38,6 +38,7 @@ export interface Member {
   bank_name: string;
   account_no: string;
   account_name: string;
+  email?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -174,6 +175,9 @@ export interface MonthlyBill {
   bill_detail?: string;
   shuttle_contributions?: string;
   applied_credits_total?: number;
+  carry_over_credits?: string;
+  logged_sessions_cost?: number;
+  is_projected_cost?: boolean;
 }
 
 export interface MonthlyDue {
@@ -185,6 +189,7 @@ export interface MonthlyDue {
   base_amount?: number;
   credit_amount?: number;
   credit_note?: string;
+  issued_at?: string;
   is_paid: boolean;
   paid_at: string;
   confirmed_by: string;
@@ -320,6 +325,7 @@ export interface BadmintonMonthlyDueItem {
   base_amount?: number;
   credit_amount?: number;
   credit_note?: string;
+  issued_at?: string;
   is_paid: boolean;
   paid_at: string;
   transferContent: string;
@@ -364,6 +370,7 @@ export interface BadmintonDuesData {
   totalGuestUnpaid: number;
   totalAdhocUnpaid: number;
   totalOutstanding: number;
+  recentSettlements?: Settlement[];
 }
 
 export interface SimplifiedTransfer {
@@ -530,9 +537,11 @@ export interface SimplifiedDebtResult {
 
 export interface VerifyEditorResponse {
   authorized: boolean;
+  isEditor?: boolean;
   email: string;
   name: string;
   role: EditorRole;
+  linkedMemberId?: string;
 }
 
 export interface ParseBillAIResponse {

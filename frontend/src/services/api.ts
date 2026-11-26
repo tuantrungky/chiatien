@@ -215,11 +215,19 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
 
   const carryIn = billRow ? billRow.carry_in : prevRow ? prevRow.carry_out : 0;
   const estimate = billRow ? billRow.estimate : suggestedEstimate;
+  const billedTotal = billRow ? billRow.billed_total : 0;
+  const status = billRow ? billRow.status : ('OPEN' as const);
+  const isProjectedCost =
+    status === 'OPEN' &&
+    (!billRow || billRow.actual_cost_override === null) &&
+    estimate > 0 &&
+    sessionsCost < estimate;
   const actualCost =
     billRow && billRow.actual_cost_override !== null
       ? billRow.actual_cost_override
+      : isProjectedCost
+      ? estimate
       : sessionsCost;
-  const billedTotal = billRow ? billRow.billed_total : 0;
   const calc = calculateMonthlyBill({
     estimate,
     carryIn,
@@ -238,12 +246,15 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     per_member: billRow ? billRow.per_member : 0,
     billed_total: billedTotal,
     actual_cost: actualCost,
+    logged_sessions_cost: sessionsCost,
+    is_projected_cost: isProjectedCost,
     actual_cost_override: billRow ? billRow.actual_cost_override : null,
     guest_income: paidAmount,
     carry_out: carryIn + billedTotal + paidAmount - actualCost,
-    status: billRow ? billRow.status : ('OPEN' as const),
+    status,
     created_by: billRow ? billRow.created_by : '',
     closed_at: billRow ? billRow.closed_at : '',
+    updated_at: billRow ? billRow.updated_at : '',
     court_fee: billRow?.court_fee ?? suggestedEstimate,
     shuttle_tube_qty: billRow?.shuttle_tube_qty ?? 0,
     shuttle_tube_price: billRow?.shuttle_tube_price ?? 0,
@@ -252,6 +263,7 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     bill_detail: billRow?.bill_detail ?? '',
     shuttle_contributions: billRow?.shuttle_contributions ?? '[]',
     applied_credits_total: billRow?.applied_credits_total ?? 0,
+    carry_over_credits: billRow?.carry_over_credits ?? '[]',
   };
 
   const duesRaw = mockState.monthlyDues.filter((d) => d.month === month);
@@ -292,12 +304,15 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     guestIncomeDetail: { paidCount, paidAmount, unpaidAmount },
     suggestedEstimateFromSchedule: suggestedEstimate,
     contributions: parseContributionsSafe(billRow?.shuttle_contributions),
-    prevMonthContributions: parseContributionsSafe(prevRow?.shuttle_contributions),
+    prevMonthContributions: [
+      ...parseContributionsSafe(prevRow?.shuttle_contributions),
+      ...parseContributionsSafe(prevRow?.carry_over_credits),
+    ],
   };
 }
 
 function buildMockDebts(): SeparatedDebtsData {
-  const badminton = buildBadmintonDues({
+  const badmintonBase = buildBadmintonDues({
     monthlyDues: mockState.monthlyDues,
     attendances: mockState.attendances,
     sessions: mockState.sessions,
@@ -306,6 +321,18 @@ function buildMockDebts(): SeparatedDebtsData {
     transferPrefix: mockState.settings.transfer_prefix,
     vietqrTemplate: mockState.settings.vietqr_template,
   });
+
+  const billByMonth = new Map(mockState.monthlyBills.map((b) => [b.month, b]));
+  const badminton = {
+    ...badmintonBase,
+    monthlyDues: badmintonBase.monthlyDues.map((d) => ({
+      ...d,
+      issued_at: billByMonth.get(d.month)?.updated_at?.slice(0, 10) || `${d.month}-01`,
+    })),
+    recentSettlements: mockState.settlements
+      .filter((s) => s.category === 'BADMINTON')
+      .sort((a, b) => b.settled_at.localeCompare(a.settled_at)),
+  };
 
   const drinkingUnpaid = mockState.attendances.filter(
     (a) => a.session_type === 'DRINKING' && !a.is_paid
@@ -579,14 +606,103 @@ export async function fetchDebts(): Promise<SeparatedDebtsData> {
 
 export async function verifyEditor(idToken: string): Promise<VerifyEditorResponse> {
   if (!IS_MOCK_MODE) {
-    return gasPost<VerifyEditorResponse>('verifyEditor', idToken, {});
+    return gasPost<VerifyEditorResponse>('verifyUser', idToken, {});
+  }
+  if (idToken === 'MOCK_MEMBER_ID_TOKEN') {
+    return mockDelay({
+      authorized: true,
+      isEditor: false,
+      email: 'member.mock@gmail.com',
+      name: 'Thành viên Demo',
+      role: 'MEMBER',
+    });
   }
   return mockDelay({
     authorized: true,
+    isEditor: true,
     email: 'tuantrungky@gmail.com',
     name: 'Tuấn (Mock)',
     role: 'ADMIN',
+    linkedMemberId: 'MEM_002',
   });
+}
+
+export async function linkMemberEmail(
+  idToken: string,
+  memberId: string
+): Promise<{ linkedMemberId: string; email: string }> {
+  if (!IS_MOCK_MODE) {
+    return gasPost<{ linkedMemberId: string; email: string }>('linkMemberEmail', idToken, {
+      memberId,
+    });
+  }
+  const m = mockState.members.find((x) => x.member_id === memberId);
+  if (m) m.email = 'member.mock@gmail.com';
+  return mockDelay({ linkedMemberId: memberId, email: 'member.mock@gmail.com' });
+}
+
+export async function undoSettlement(
+  idToken: string,
+  settlementId: string
+): Promise<{ undoneSettlementId: string; updatedDebts: SeparatedDebtsData }> {
+  if (!IS_MOCK_MODE) {
+    return gasPost<{ undoneSettlementId: string; updatedDebts: SeparatedDebtsData }>(
+      'undoSettlement',
+      idToken,
+      { settlementId }
+    );
+  }
+  const st = mockState.settlements.find((s) => s.settlement_id === settlementId);
+  if (!st) throw new ApiClientError('NOT_FOUND', 'Không tìm thấy giao dịch thanh toán.');
+
+  const sourceSet = new Set(
+    (st.source_attendance_ids || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+  const affectedSessions = new Set<string>();
+  for (const a of mockState.attendances) {
+    if (a.settlement_id === settlementId || sourceSet.has(a.attendance_id)) {
+      affectedSessions.add(a.session_id);
+      a.is_paid = false;
+      a.paid_at = '';
+      a.settlement_id = '';
+      a.net_amount = a.session_type === 'DRINKING' ? a.fee_amount - a.contributed_amount : a.fee_amount;
+    }
+  }
+  if (st.category === 'DRINKING') {
+    for (const sId of affectedSessions) {
+      const sess = mockState.sessions.find((x) => x.session_id === sId);
+      const sessAtts = mockState.attendances.filter((a) => a.session_id === sId);
+      const sessItems = mockState.sessionItems.filter((it) => it.session_id === sId);
+      if (sess && sessAtts.length > 0) {
+        const split = calculateDrinkingSplit(
+          sessAtts.map((a) => a.member_id),
+          sessItems.map((it) => ({
+            member_id: it.member_id,
+            kind: it.kind,
+            item_name: it.item_name,
+            amount: it.amount,
+          })),
+          mockState.settings.rounding_unit
+        );
+        const byMem = new Map(split.splits.map((sp) => [sp.memberId, sp]));
+        for (const a of sessAtts) {
+          const sp = byMem.get(a.member_id);
+          if (!sp) continue;
+          a.net_amount = sp.netAmount;
+          a.is_paid = sp.isPaid;
+          if (!sp.isPaid) {
+            a.paid_at = '';
+            a.settlement_id = '';
+          }
+        }
+      }
+    }
+  }
+  mockState.settlements = mockState.settlements.filter((s) => s.settlement_id !== settlementId);
+  return mockDelay({ undoneSettlementId: settlementId, updatedDebts: buildMockDebts() });
 }
 
 export async function parseBillAI(
@@ -1117,6 +1233,7 @@ export async function issueMonthlyBill(
     shuttle_contributions:
       existingBillIdx >= 0 ? mockState.monthlyBills[existingBillIdx].shuttle_contributions || '[]' : '[]',
     applied_credits_total: detailed.appliedCreditsTotal,
+    carry_over_credits: JSON.stringify(detailed.carryOverCredits),
   };
   if (existingBillIdx >= 0) mockState.monthlyBills[existingBillIdx] = nextBill;
   else mockState.monthlyBills.push(nextBill);

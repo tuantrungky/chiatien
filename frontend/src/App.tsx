@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Layout, type ActiveTab } from './components/Layout';
+import { MemberIdentityModal } from './components/MemberIdentityModal';
 import { ReauthModal } from './components/ReauthModal';
 import { SkeletonLoader } from './components/SkeletonLoader';
 import { VietQRModal, type VietQRModalData } from './components/VietQRModal';
@@ -25,10 +27,31 @@ const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 );
 
+const TAB_PATHS: Record<ActiveTab, string> = {
+  dashboard: '/',
+  calendar: '/calendar',
+  debts: '/debts',
+  monthly: '/monthly',
+  create: '/create',
+  settings: '/settings',
+};
+
+function pathToTab(pathname: string): ActiveTab {
+  if (pathname.startsWith('/calendar')) return 'calendar';
+  if (pathname.startsWith('/debts')) return 'debts';
+  if (pathname.startsWith('/monthly')) return 'monthly';
+  if (pathname.startsWith('/create')) return 'create';
+  if (pathname.startsWith('/settings')) return 'settings';
+  return 'dashboard';
+}
+
 export default function App() {
   const { isEditor } = useAuth();
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeTab = pathToTab(location.pathname);
+
   const [qrModalData, setQrModalData] = useState<VietQRModalData | null>(null);
   const [editingSession, setEditingSession] = useState<Session | null>(null);
   const [prefillPlan, setPrefillPlan] = useState<ScheduleDay | null>(null);
@@ -60,11 +83,11 @@ export default function App() {
 
   useEffect(() => {
     if (!isEditor && (activeTab === 'create' || activeTab === 'settings')) {
-      setActiveTab('dashboard');
+      navigate('/', { replace: true });
       setEditingSession(null);
       setPrefillPlan(null);
     }
-  }, [isEditor, activeTab]);
+  }, [isEditor, activeTab, navigate]);
 
   const treasurer = useMemo(
     () =>
@@ -81,14 +104,14 @@ export default function App() {
       setEditingSession(null);
       setPrefillPlan(null);
     }
-    setActiveTab(tab);
+    navigate(TAB_PATHS[tab]);
   };
 
   const handleEditSession = (session: Session) => {
     if (!isEditor) return;
     setPrefillPlan(null);
     setEditingSession(session);
-    setActiveTab('create');
+    navigate('/create');
   };
 
   const handleCheckInPlan = (plan: ScheduleDay) => {
@@ -98,7 +121,7 @@ export default function App() {
     setCreateInitialType('BADMINTON');
     setCreateInitialDate(plan.date);
     setCreateInitialAdhoc(false);
-    setActiveTab('create');
+    navigate('/create');
   };
 
   const handleCreateNewSession = (
@@ -111,7 +134,7 @@ export default function App() {
     setCreateInitialType(type);
     setCreateInitialDate(options?.date);
     setCreateInitialAdhoc(Boolean(options?.isAdhoc));
-    setActiveTab('create');
+    navigate('/create');
   };
 
   const handleManualRefresh = async () => {
@@ -152,108 +175,143 @@ export default function App() {
         <SkeletonLoader />
       ) : (
         <Suspense fallback={<SkeletonLoader />}>
-          {activeTab === 'dashboard' && (
-            <DashboardPage
-              periodType={periodType}
-              refDate={refDate}
-              onChangePeriodType={setPeriodType}
-              onChangeRefDate={setRefDate}
-              bootstrap={bootstrap}
-              dashboard={dashboard}
-              sessions={sessions}
-              debts={debts}
-              schedule={schedule}
-              monthlyBill={monthlyBill}
-              simplifiedDrinkingDebts={simplifiedDrinkingDebts}
-              onOpenQr={setQrModalData}
-              onGoToDebts={() => setActiveTab('debts')}
-              onGoToCalendar={() => setActiveTab('calendar')}
-              onGoToMonthly={() => setActiveTab('monthly')}
-              onCheckInPlan={handleCheckInPlan}
-              onCreateSession={handleCreateNewSession}
-            />
-          )}
-
-          {activeTab === 'calendar' && bootstrap && (
-            <CalendarPage
-              activeMonth={activeMonth}
-              onChangeMonth={setActiveMonth}
-              schedule={schedule}
-              sessions={sessions}
-              members={bootstrap.members}
-              settings={bootstrap.settings}
-              onRefreshAll={refreshAll}
-              onCheckInPlan={handleCheckInPlan}
-              onCreateAdhocBadmintonOnDate={(d) =>
-                handleCreateNewSession('BADMINTON', { date: d, isAdhoc: true })
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <DashboardPage
+                  periodType={periodType}
+                  refDate={refDate}
+                  onChangePeriodType={setPeriodType}
+                  onChangeRefDate={setRefDate}
+                  bootstrap={bootstrap}
+                  dashboard={dashboard}
+                  sessions={sessions}
+                  debts={debts}
+                  schedule={schedule}
+                  monthlyBill={monthlyBill}
+                  simplifiedDrinkingDebts={simplifiedDrinkingDebts}
+                  onOpenQr={setQrModalData}
+                  onGoToDebts={() => navigate('/debts')}
+                  onGoToCalendar={() => navigate('/calendar')}
+                  onGoToMonthly={() => navigate('/monthly')}
+                  onCheckInPlan={handleCheckInPlan}
+                  onCreateSession={handleCreateNewSession}
+                />
               }
-              onCreateDrinkingOnDate={(d) => handleCreateNewSession('DRINKING', { date: d })}
             />
-          )}
 
-          {activeTab === 'debts' && (
-            <DebtsAndSessionsPage
-              bootstrap={bootstrap}
-              debts={debts}
-              simplifiedDrinkingDebts={simplifiedDrinkingDebts}
-              sessions={sessions}
-              onOpenQr={setQrModalData}
-              onRefreshAll={refreshAll}
-              onEditSession={handleEditSession}
-              onCreateNewSession={(t) => handleCreateNewSession(t)}
-            />
-          )}
-
-          {activeTab === 'monthly' && (
-            <MonthlyBadmintonPage
-              bootstrap={bootstrap}
-              monthlyBill={monthlyBill}
-              guestStats={guestStats}
-              activeMonth={activeMonth}
-              onChangeMonth={setActiveMonth}
-              onOpenQr={setQrModalData}
-              onRefreshAll={refreshAll}
-            />
-          )}
-
-          {activeTab === 'create' && isEditor && bootstrap && (
-            <CreateSessionPage
-              key={
-                editingSession?.session_id ||
-                prefillPlan?.plan_id ||
-                `${createInitialType}-${createInitialDate || 'new'}-${createInitialAdhoc ? 'adhoc' : 'std'}`
+            <Route
+              path="/calendar"
+              element={
+                bootstrap ? (
+                  <CalendarPage
+                    activeMonth={activeMonth}
+                    onChangeMonth={setActiveMonth}
+                    schedule={schedule}
+                    sessions={sessions}
+                    members={bootstrap.members}
+                    settings={bootstrap.settings}
+                    onRefreshAll={refreshAll}
+                    onCheckInPlan={handleCheckInPlan}
+                    onCreateAdhocBadmintonOnDate={(d) =>
+                      handleCreateNewSession('BADMINTON', { date: d, isAdhoc: true })
+                    }
+                    onCreateDrinkingOnDate={(d) => handleCreateNewSession('DRINKING', { date: d })}
+                  />
+                ) : (
+                  <SkeletonLoader />
+                )
               }
-              members={bootstrap.members}
-              settings={bootstrap.settings}
-              editingSession={editingSession}
-              prefillPlan={prefillPlan}
-              initialType={createInitialType}
-              initialDate={createInitialDate}
-              initialAdhoc={createInitialAdhoc}
-              onCancelEdit={() => {
-                setEditingSession(null);
-                setPrefillPlan(null);
-                setCreateInitialAdhoc(false);
-                setActiveTab(prefillPlan ? 'calendar' : 'debts');
-              }}
-              onSaved={async () => {
-                await refreshAll();
-                const cameFromPlan = Boolean(prefillPlan);
-                setEditingSession(null);
-                setPrefillPlan(null);
-                setCreateInitialAdhoc(false);
-                setActiveTab(cameFromPlan ? 'calendar' : 'debts');
-              }}
             />
-          )}
 
-          {activeTab === 'settings' && isEditor && bootstrap && (
-            <SettingsPage
-              members={bootstrap.members}
-              settings={bootstrap.settings}
-              onRefreshAll={refreshAll}
+            <Route
+              path="/debts"
+              element={
+                <DebtsAndSessionsPage
+                  bootstrap={bootstrap}
+                  debts={debts}
+                  simplifiedDrinkingDebts={simplifiedDrinkingDebts}
+                  sessions={sessions}
+                  onOpenQr={setQrModalData}
+                  onRefreshAll={refreshAll}
+                  onEditSession={handleEditSession}
+                  onCreateNewSession={(t) => handleCreateNewSession(t)}
+                />
+              }
             />
-          )}
+
+            <Route
+              path="/monthly"
+              element={
+                <MonthlyBadmintonPage
+                  bootstrap={bootstrap}
+                  monthlyBill={monthlyBill}
+                  guestStats={guestStats}
+                  activeMonth={activeMonth}
+                  onChangeMonth={setActiveMonth}
+                  onOpenQr={setQrModalData}
+                  onRefreshAll={refreshAll}
+                />
+              }
+            />
+
+            <Route
+              path="/create"
+              element={
+                isEditor && bootstrap ? (
+                  <CreateSessionPage
+                    key={
+                      editingSession?.session_id ||
+                      prefillPlan?.plan_id ||
+                      `${createInitialType}-${createInitialDate || 'new'}-${createInitialAdhoc ? 'adhoc' : 'std'}`
+                    }
+                    members={bootstrap.members}
+                    settings={bootstrap.settings}
+                    editingSession={editingSession}
+                    prefillPlan={prefillPlan}
+                    initialType={createInitialType}
+                    initialDate={createInitialDate}
+                    initialAdhoc={createInitialAdhoc}
+                    onCancelEdit={() => {
+                      const cameFromPlan = Boolean(prefillPlan);
+                      setEditingSession(null);
+                      setPrefillPlan(null);
+                      setCreateInitialAdhoc(false);
+                      navigate(cameFromPlan ? '/calendar' : '/debts');
+                    }}
+                    onSaved={async () => {
+                      await refreshAll();
+                      const cameFromPlan = Boolean(prefillPlan);
+                      setEditingSession(null);
+                      setPrefillPlan(null);
+                      setCreateInitialAdhoc(false);
+                      navigate(cameFromPlan ? '/calendar' : '/debts');
+                    }}
+                  />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+
+            <Route
+              path="/settings"
+              element={
+                isEditor && bootstrap ? (
+                  <SettingsPage
+                    members={bootstrap.members}
+                    settings={bootstrap.settings}
+                    onRefreshAll={refreshAll}
+                  />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </Suspense>
       )}
 
@@ -265,6 +323,11 @@ export default function App() {
         }
         data={qrModalData}
         onClose={() => setQrModalData(null)}
+      />
+
+      <MemberIdentityModal
+        members={bootstrap?.members || []}
+        onLinked={refreshAll}
       />
 
       <ReauthModal />

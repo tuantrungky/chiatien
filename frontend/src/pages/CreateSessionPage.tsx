@@ -655,6 +655,68 @@ export function CreateSessionPage({
             </div>
           </label>
         )}
+
+        {/* Quét hóa đơn AI dùng chung cho cả Cầu lông & Ăn nhậu */}
+        <div className="pt-2 border-t border-slate-100 space-y-2.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <p className="text-xs font-bold text-slate-700">
+                {sessionType === 'BADMINTON'
+                  ? 'Ảnh phiếu tính tiền sân / cầu (Quét AI)'
+                  : 'Ảnh hóa đơn quán / phiếu tính tiền (Quét AI)'}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Chụp hoặc chọn ảnh để AI tự trích tổng tiền &amp; lưu biên lai lên Google Drive.
+              </p>
+            </div>
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleBillFileChange}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={aiBillLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer disabled:opacity-60"
+              >
+                {aiBillLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Camera className="w-4 h-4" />
+                )}
+                <span>{aiBillLoading ? 'Đang quét AI...' : 'Quét hóa đơn AI'}</span>
+              </button>
+            </div>
+          </div>
+
+          {billPreviewUrl && (
+            <div className="flex items-center gap-3 bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+              <img
+                src={billPreviewUrl}
+                alt="Xem trước hóa đơn"
+                className="w-14 h-14 object-cover rounded-lg border border-slate-200"
+              />
+              <div className="text-xs text-slate-600 min-w-0">
+                <p className="font-semibold text-slate-800">Đã nén ảnh ({billImageSizeKB} KB)</p>
+                {receiptUrl && (
+                  <a
+                    href={receiptUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 underline truncate block"
+                  >
+                    Xem ảnh lưu trên Google Drive
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* 2A. CHI PHÍ CẦU LÔNG (SÂN + SÂN THÊM GIỜ + CẦU + KHÁC) */}
@@ -943,7 +1005,7 @@ export function CreateSessionPage({
         </section>
       )}
 
-      {/* 2B. CHI PHÍ ĂN NHẬU (RA QUÁN / Ở NHÀ + GÓP MÓN + QUÉT BILL AI) */}
+      {/* 2B. CHI PHÍ ĂN NHẬU (RA QUÁN / Ở NHÀ + GÓP MÓN) */}
       {sessionType === 'DRINKING' && (
         <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3.5 shadow-xs">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -969,54 +1031,7 @@ export function CreateSessionPage({
                 <span>Ở nhà (góp món)</span>
               </button>
             </div>
-
-            <div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleBillFileChange}
-                className="hidden"
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={aiBillLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer disabled:opacity-60"
-              >
-                {aiBillLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Camera className="w-4 h-4" />
-                )}
-                <span>{aiBillLoading ? 'Đang quét AI...' : 'Quét hóa đơn AI'}</span>
-              </button>
-            </div>
           </div>
-
-          {billPreviewUrl && (
-            <div className="flex items-center gap-3 bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-              <img
-                src={billPreviewUrl}
-                alt="Xem trước hóa đơn"
-                className="w-14 h-14 object-cover rounded-lg border border-slate-200"
-              />
-              <div className="text-xs text-slate-600 min-w-0">
-                <p className="font-semibold text-slate-800">Đã nén ảnh ({billImageSizeKB} KB)</p>
-                {receiptUrl && (
-                  <a
-                    href={receiptUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 underline truncate block"
-                  >
-                    Xem ảnh lưu trên Google Drive
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* Danh sách đóng góp (Hóa đơn quán / Món góp) */}
           <div className="space-y-2">

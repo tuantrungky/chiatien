@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Copy,
   Loader2,
   Lock,
   PackagePlus,
@@ -18,6 +19,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { OverdueBadge } from '../components/OverdueBadge';
 import type { VietQRModalData } from '../components/VietQRModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -37,9 +39,11 @@ import type {
   MonthlyBillDetail,
   ShuttleContributionItem,
 } from '../types';
-import { formatShortDateVN } from '../utils/dateFilters';
+import { formatShortDateVN, getTodayDateStr } from '../utils/dateFilters';
 import { calculateDetailedMonthlyBill } from '../utils/monthlyBill';
+import { getOverdueInfo } from '../utils/overdue';
 import { buildTransferContent, buildVietQrUrl, formatVND } from '../utils/vietqr';
+import { buildMonthlyBillZaloMessage } from '../utils/zaloShare';
 
 interface MonthlyBadmintonPageProps {
   bootstrap: BootstrapData | null;
@@ -72,8 +76,9 @@ export function MonthlyBadmintonPage({
   onOpenQr,
   onRefreshAll,
 }: MonthlyBadmintonPageProps) {
-  const { isEditor, idToken, handleApiError } = useAuth();
+  const { isEditor, idToken, myMemberId, handleApiError } = useAuth();
   const toast = useToast();
+  const todayStr = getTodayDateStr();
 
   const [subTab, setSubTab] = useState<'MONTHLY_BILL' | 'GUEST_STATS'>('MONTHLY_BILL');
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -506,15 +511,42 @@ export function MonthlyBadmintonPage({
                   Quyết toán {formatMonthLabel(activeMonth)}
                 </h2>
               </div>
-              <span
-                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
-                  bill?.status === 'CLOSED'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-emerald-50 text-emerald-700'
-                }`}
-              >
-                {bill?.status === 'CLOSED' ? 'Đã chốt tháng' : 'Đang mở'}
-              </span>
+              <div className="flex items-center gap-2">
+                {bill && dues.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const msg = buildMonthlyBillZaloMessage({
+                        clubName: bootstrap?.settings.club_name || 'Lông Ca Club',
+                        month: activeMonth,
+                        bill,
+                        dues,
+                        treasurer,
+                        appUrl: window.location.origin,
+                      });
+                      try {
+                        await navigator.clipboard.writeText(msg);
+                        toast.success('Đã copy tin nhắn báo thu tháng cho Zalo!');
+                      } catch {
+                        toast.error('Trình duyệt không cho phép copy tự động.');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-[11px] font-bold cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy báo thu Zalo</span>
+                  </button>
+                )}
+                <span
+                  className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                    bill?.status === 'CLOSED'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  {bill?.status === 'CLOSED' ? 'Đã chốt tháng' : 'Đang mở'}
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5 text-xs">
@@ -571,8 +603,11 @@ export function MonthlyBadmintonPage({
                   {(bill?.carry_out ?? 0) >= 0 ? '+' : ''}
                   {formatVND(bill?.carry_out ?? 0)}
                 </p>
-                <p className="text-[10px] text-blue-700">
-                  Chi: {formatVND(bill?.actual_cost ?? 0)} • VL thu: {formatVND(bill?.guest_income ?? 0)}
+                <p className="text-[10px] text-blue-700 leading-snug">
+                  {bill?.is_projected_cost
+                    ? `Chi dự kiến (chủ sân): ${formatVND(bill?.actual_cost ?? 0)}`
+                    : `Chi: ${formatVND(bill?.actual_cost ?? 0)}`}{' '}
+                  • VL thu: {formatVND(bill?.guest_income ?? 0)}
                 </p>
               </div>
             </div>
@@ -687,10 +722,15 @@ export function MonthlyBadmintonPage({
                 {dues.map((d) => {
                   const hasCredit = (d.credit_amount ?? 0) > 0;
                   const baseAmt = d.base_amount ?? d.amount;
+                  const isMine = myMemberId === d.member_id;
+                  const dueDateRef = d.issued_at || `${activeMonth}-01`;
+                  const ov = !d.is_paid ? getOverdueInfo(dueDateRef, todayStr) : null;
                   return (
                     <div
                       key={d.due_id}
-                      className="px-4 py-3 flex items-center justify-between gap-2.5 flex-wrap"
+                      className={`px-4 py-3 flex items-center justify-between gap-2.5 flex-wrap ${
+                        ov?.rowClass || (isMine ? 'bg-sky-50/40' : '')
+                      }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         {d.is_paid ? (
@@ -703,11 +743,17 @@ export function MonthlyBadmintonPage({
                             <p className="text-sm font-semibold text-slate-900 truncate">
                               {d.member_name}
                             </p>
+                            {isMine && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
+                                Bạn
+                              </span>
+                            )}
                             {hasCredit && (
                               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                                 Đã trừ góp cầu
                               </span>
                             )}
+                            {!d.is_paid && <OverdueBadge fromDate={dueDateRef} todayStr={todayStr} />}
                           </div>
                           <p className="text-xs text-slate-500">
                             {d.is_paid
@@ -824,8 +870,15 @@ export function MonthlyBadmintonPage({
               <div className="divide-y divide-slate-100">
                 {guestStats.guests.map((g) => {
                   const hasDebt = g.totalUnpaid > 0;
+                  const oldestUnpaidDate = hasDebt
+                    ? g.sessions
+                        .filter((s) => !s.isPaid)
+                        .map((s) => s.date)
+                        .sort()[0] || [...g.dates].sort()[0]
+                    : '';
+                  const ov = hasDebt && oldestUnpaidDate ? getOverdueInfo(oldestUnpaidDate, todayStr) : null;
                   return (
-                    <div key={g.memberId} className="p-4 space-y-2.5">
+                    <div key={g.memberId} className={`p-4 space-y-2.5 ${ov?.rowClass || ''}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -833,6 +886,9 @@ export function MonthlyBadmintonPage({
                             <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
                               {g.sessionCount} buổi
                             </span>
+                            {hasDebt && oldestUnpaidDate && (
+                              <OverdueBadge fromDate={oldestUnpaidDate} todayStr={todayStr} />
+                            )}
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5">
                             Tổng phí:{' '}

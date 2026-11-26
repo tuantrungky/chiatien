@@ -75,6 +75,7 @@ export interface DetailedMonthlyBillResult {
   perMember: number;
   billedTotal: number;
   memberDues: DetailedMemberDueLine[];
+  carryOverCredits: ShuttleContributionItem[];
   actualCost: number;
   guestIncome: number;
   carryOut: number;
@@ -154,6 +155,7 @@ export function calculateDetailedMonthlyBill(
       : 0;
 
   let billedTotal = 0;
+  const carryOverCredits: ShuttleContributionItem[] = [];
   const memberDues: DetailedMemberDueLine[] = memberIds.map((memberId) => {
     const creditAmount = creditByMember.get(memberId) || 0;
     const netAmount = Math.max(0, perMember - creditAmount);
@@ -163,7 +165,15 @@ export function calculateDetailedMonthlyBill(
     if (creditAmount > 0) {
       creditNote = `Trừ góp cầu: ${(creditNotesByMember.get(memberId) || []).join(', ')}`;
       if (remainingCredit > 0) {
-        creditNote += ` (Còn dư ${remainingCredit.toLocaleString('vi-VN')}đ)`;
+        creditNote += ` (Còn dư ${remainingCredit.toLocaleString('vi-VN')}đ chuyển T.sau)`;
+        carryOverCredits.push({
+          id: `CARRY_${memberId}`,
+          member_id: memberId,
+          tube_qty: 0,
+          unit_price: 0,
+          amount: remainingCredit,
+          note: 'Dư góp cầu tháng trước chuyển sang',
+        });
       }
     }
     return {
@@ -197,6 +207,7 @@ export function calculateDetailedMonthlyBill(
     perMember,
     billedTotal,
     memberDues,
+    carryOverCredits,
     actualCost,
     guestIncome,
     carryOut,

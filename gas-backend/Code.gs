@@ -148,24 +148,49 @@ function doPost(e) {
     var idToken = String(body.id_token || body.idToken || '').trim();
     var payload = (body.payload && typeof body.payload === 'object') ? body.payload : body;
 
-    // 1. Bắt buộc xác thực Google ID Token & đối chiếu tab Editors
-    var auth = verifyEditorToken(idToken);
+    // 1. Xác thực Google ID Token (cho phép cả Editor lẫn Member thường)
+    var auth = verifyUserToken(idToken);
     if (!auth.authorized) {
       return jsonError_(
-        auth.code || (auth.status === 403 ? 'FORBIDDEN' : 'UNAUTHORIZED'),
-        auth.message || 'Không có quyền truy cập.',
+        auth.code || 'UNAUTHORIZED',
+        auth.message || 'Phiên đăng nhập không hợp lệ.',
         auth.status
       );
     }
 
-    // 2. Kiểm tra đăng nhập Editor & đọc danh sách Editors
-    if (action === 'verifyEditor') {
+    // 2. Endpoint cho mọi tài khoản Google đã đăng nhập (Editor & Member)
+    if (action === 'verifyEditor' || action === 'verifyUser') {
       return jsonResponse_(true, {
         authorized: true,
+        isEditor: Boolean(auth.isEditor),
         email: auth.email,
         name: auth.name,
-        role: auth.role
+        role: auth.role,
+        linkedMemberId: auth.linkedMemberId || ''
       });
+    }
+
+    if (action === 'linkMemberEmail') {
+      var userLock = LockService.getScriptLock();
+      if (!userLock.tryLock(15000)) {
+        return jsonError_('CONFLICT_LOCK', 'Hệ thống đang bận, vui lòng thử lại sau vài giây.');
+      }
+      try {
+        var linked = linkMemberEmailRecord(payload, auth.email);
+        bumpCacheVersion_();
+        return jsonResponse_(true, linked);
+      } finally {
+        userLock.releaseLock();
+      }
+    }
+
+    // 3. Từ đây trở xuống BẮT BUỘC phải là Editor hoặc Admin
+    if (!auth.isEditor) {
+      return jsonError_(
+        'FORBIDDEN',
+        'Tài khoản ' + auth.email + ' chỉ có quyền thành viên xem công khai, không thể chỉnh sửa dữ liệu.',
+        403
+      );
     }
 
     if (action === 'getEditors') {
@@ -220,6 +245,10 @@ function doPost(e) {
         case 'confirmPayment':
         case 'confirmSettlement':
           result = confirmPaymentRecord(payload, auth.email);
+          break;
+
+        case 'undoSettlement':
+          result = undoSettlementRecord(payload);
           break;
 
         case 'generateSchedule':
