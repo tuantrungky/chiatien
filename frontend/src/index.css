@@ -1,7 +1,9 @@
 @import "tailwindcss";
 
 @layer base {
-  html {
+  html,
+  body {
     -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-x: none;
   }
 }

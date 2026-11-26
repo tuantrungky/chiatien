@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 import { GlobalSavingOverlay } from './components/GlobalSavingOverlay';
 import { Layout, type ActiveTab } from './components/Layout';
 import { MemberIdentityModal } from './components/MemberIdentityModal';
+import { MobileExitGuard } from './components/MobileExitGuard';
 import { ReauthModal } from './components/ReauthModal';
 import { SkeletonLoader } from './components/SkeletonLoader';
 import { VietQRModal, type VietQRModalData } from './components/VietQRModal';
@@ -194,6 +195,11 @@ export default function App() {
                   simplifiedDrinkingDebts={simplifiedDrinkingDebts}
                   onOpenQr={setQrModalData}
                   onGoToDebts={() => navigate('/debts')}
+                  onGoToSessions={(type) =>
+                    navigate(
+                      type && type !== 'ALL' ? `/debts?tab=sessions&type=${type}` : '/debts?tab=sessions'
+                    )
+                  }
                   onGoToCalendar={() => navigate('/calendar')}
                   onGoToMonthly={() => navigate('/monthly')}
                   onCheckInPlan={handleCheckInPlan}
@@ -333,6 +339,8 @@ export default function App() {
       />
 
       <ReauthModal />
+
+      <MobileExitGuard />
 
       <GlobalSavingOverlay />
     </Layout>

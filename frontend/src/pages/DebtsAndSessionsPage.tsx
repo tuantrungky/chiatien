@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRight,
@@ -72,11 +73,50 @@ export function DebtsAndSessionsPage({
 }: DebtsAndSessionsPageProps) {
   const { isEditor, idToken, myMemberId, setMyMemberId, handleApiError } = useAuth();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const todayStr = getTodayDateStr();
-  const [subTab, setSubTab] = useState<'DEBTS' | 'SESSIONS'>('DEBTS');
+  const [subTab, setSubTab] = useState<'DEBTS' | 'SESSIONS'>(() =>
+    searchParams.get('tab') === 'sessions' ? 'SESSIONS' : 'DEBTS'
+  );
   const [debtViewMode, setDebtViewMode] = useState<'ALL' | 'MINE'>('ALL');
   const [expandedTransferKey, setExpandedTransferKey] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<'ALL' | 'BADMINTON' | 'DRINKING'>('ALL');
+  const [sessionFilter, setSessionFilter] = useState<'ALL' | 'BADMINTON' | 'DRINKING'>(() => {
+    const typeParam = searchParams.get('type');
+    return typeParam === 'BADMINTON' || typeParam === 'DRINKING' ? typeParam : 'ALL';
+  });
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    const typeParam = searchParams.get('type');
+    setSubTab(tabParam === 'sessions' ? 'SESSIONS' : 'DEBTS');
+    if (typeParam === 'BADMINTON' || typeParam === 'DRINKING' || typeParam === 'ALL') {
+      setSessionFilter(typeParam);
+    } else if (tabParam === 'sessions') {
+      setSessionFilter('ALL');
+    }
+  }, [searchParams]);
+
+  const handleSelectSubTab = (nextTab: 'DEBTS' | 'SESSIONS') => {
+    setSubTab(nextTab);
+    if (nextTab === 'DEBTS') {
+      setSearchParams({}, { replace: true });
+    } else {
+      const nextParams: Record<string, string> = { tab: 'sessions' };
+      if (sessionFilter !== 'ALL') {
+        nextParams.type = sessionFilter;
+      }
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
+
+  const handleSelectSessionFilter = (nextFilter: 'ALL' | 'BADMINTON' | 'DRINKING') => {
+    setSessionFilter(nextFilter);
+    const nextParams: Record<string, string> = { tab: 'sessions' };
+    if (nextFilter !== 'ALL') {
+      nextParams.type = nextFilter;
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [sessionDetailCache, setSessionDetailCache] = useState<Record<string, SessionDetailData>>({});
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
@@ -331,7 +371,7 @@ export function DebtsAndSessionsPage({
       <div className="grid grid-cols-2 gap-1 bg-slate-200/70 p-1 rounded-2xl">
         <button
           type="button"
-          onClick={() => setSubTab('DEBTS')}
+          onClick={() => handleSelectSubTab('DEBTS')}
           className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
             subTab === 'DEBTS'
               ? 'bg-white text-emerald-700 shadow-xs'
@@ -343,7 +383,7 @@ export function DebtsAndSessionsPage({
         </button>
         <button
           type="button"
-          onClick={() => setSubTab('SESSIONS')}
+          onClick={() => handleSelectSubTab('SESSIONS')}
           className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
             subTab === 'SESSIONS'
               ? 'bg-white text-emerald-700 shadow-xs'
@@ -885,7 +925,7 @@ export function DebtsAndSessionsPage({
                 <button
                   key={pill.id}
                   type="button"
-                  onClick={() => setSessionFilter(pill.id)}
+                  onClick={() => handleSelectSessionFilter(pill.id)}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer ${
                     sessionFilter === pill.id
                       ? 'bg-slate-900 text-white'

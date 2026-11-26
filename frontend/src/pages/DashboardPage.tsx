@@ -69,6 +69,7 @@ interface DashboardPageProps {
   simplifiedDrinkingDebts: SimplifiedDebtResult;
   onOpenQr: (data: VietQRModalData) => void;
   onGoToDebts: () => void;
+  onGoToSessions?: (type?: 'ALL' | 'BADMINTON' | 'DRINKING') => void;
   onGoToCalendar: () => void;
   onGoToMonthly: () => void;
   onCheckInPlan: (plan: ScheduleDay) => void;
@@ -96,6 +97,7 @@ export function DashboardPage({
   simplifiedDrinkingDebts,
   onOpenQr,
   onGoToDebts,
+  onGoToSessions,
   onGoToCalendar,
   onGoToMonthly,
   onCheckInPlan,
@@ -291,7 +293,11 @@ export function DashboardPage({
 
       {/* 4 Thẻ chỉ số nhanh (KPI) */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-gradient-to-br from-[#113b66] via-[#1b568f] to-[#0d7c66] text-white rounded-2xl p-3.5 shadow-sm">
+        <button
+          type="button"
+          onClick={() => (onGoToSessions ? onGoToSessions('BADMINTON') : onGoToDebts())}
+          className="text-left bg-gradient-to-br from-[#113b66] via-[#1b568f] to-[#0d7c66] text-white rounded-2xl p-3.5 shadow-sm cursor-pointer transition hover:shadow-md active:scale-[0.98]"
+        >
           <div className="flex items-center justify-between text-sky-100 text-xs font-medium mb-1.5">
             <span>Chi Cầu lông (kỳ)</span>
             <Trophy className="w-4 h-4 text-amber-300 shrink-0" />
@@ -299,12 +305,19 @@ export function DashboardPage({
           <p className="text-lg sm:text-xl font-extrabold tracking-tight">
             {formatVND(badmintonCostInPeriod)}
           </p>
-          <p className="text-[11px] text-sky-100/90 mt-1">
-            {fixedCountInPeriod} cố định • {adhocCountInPeriod} phát sinh
+          <p className="text-[11px] text-sky-100/90 mt-1 flex items-center justify-between gap-1">
+            <span>
+              {fixedCountInPeriod} cố định • {adhocCountInPeriod} phát sinh
+            </span>
+            <span aria-hidden="true">→</span>
           </p>
-        </div>
+        </button>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
+        <button
+          type="button"
+          onClick={() => (onGoToSessions ? onGoToSessions('DRINKING') : onGoToDebts())}
+          className="text-left bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs cursor-pointer transition hover:shadow-md active:scale-[0.98]"
+        >
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
             <span>Chi Ăn nhậu (kỳ)</span>
             <Utensils className="w-4 h-4 text-orange-500 shrink-0" />
@@ -312,18 +325,33 @@ export function DashboardPage({
           <p className="text-lg sm:text-xl font-extrabold text-slate-900">
             {formatVND(drinkingCostInPeriod)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            {drinkingPeriodSessions.length} buổi ăn nhậu
+          <p className="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-1">
+            <span>{drinkingPeriodSessions.length} buổi ăn nhậu</span>
+            <span className="text-slate-400" aria-hidden="true">→</span>
           </p>
-        </div>
+        </button>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs flex flex-col justify-between">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onGoToMonthly}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onGoToMonthly();
+            }
+          }}
+          className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs flex flex-col justify-between cursor-pointer transition hover:shadow-md active:scale-[0.98]"
+        >
           <div>
             <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5 gap-1">
               <span className="truncate">Bù trừ Cầu T.{monthLabel}</span>
               <button
                 type="button"
-                onClick={() => setShowFormula((v) => !v)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowFormula((v) => !v);
+                }}
                 aria-label="Xem công thức bù trừ cầu sang tháng sau"
                 className="inline-flex items-center gap-0.5 text-[10px] font-bold text-blue-600 hover:text-blue-700 shrink-0 cursor-pointer"
               >
@@ -339,7 +367,10 @@ export function DashboardPage({
                 </p>
                 <button
                   type="button"
-                  onClick={onGoToMonthly}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onGoToMonthly();
+                  }}
                   className="text-[11px] text-emerald-700 font-semibold hover:underline mt-1 text-left cursor-pointer"
                 >
                   Vào Tháng cầu để chia →
@@ -355,17 +386,24 @@ export function DashboardPage({
                   {projectedCarryOut >= 0 ? 'Dư +' : 'Thiếu '}
                   {formatVND(projectedCarryOut)}
                 </p>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  {projectedCarryOut >= 0
-                    ? 'Tháng sau mỗi người đóng ít đi'
-                    : 'Tháng sau chia bù phần thiếu'}
+                <p className="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-1">
+                  <span>
+                    {projectedCarryOut >= 0
+                      ? 'Tháng sau mỗi người đóng ít đi'
+                      : 'Tháng sau chia bù phần thiếu'}
+                  </span>
+                  <span className="text-slate-400 shrink-0" aria-hidden="true">→</span>
                 </p>
               </>
             )}
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
+        <button
+          type="button"
+          onClick={onGoToDebts}
+          className="text-left bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs cursor-pointer transition hover:shadow-md active:scale-[0.98]"
+        >
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
             <span>Nợ chưa thu</span>
             <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
@@ -373,10 +411,13 @@ export function DashboardPage({
           <p className="text-lg sm:text-xl font-extrabold text-rose-600">
             {formatVND(badmintonUnpaid + drinkingUnpaid)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1 truncate">
-            Cầu: {formatVND(badmintonUnpaid)} • Nhậu: {formatVND(drinkingUnpaid)}
+          <p className="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-1">
+            <span className="truncate">
+              Cầu: {formatVND(badmintonUnpaid)} • Nhậu: {formatVND(drinkingUnpaid)}
+            </span>
+            <span className="text-slate-400 shrink-0" aria-hidden="true">→</span>
           </p>
-        </div>
+        </button>
       </section>
 
       {/* Hộp giải thích công thức Bù trừ Cầu sang tháng sau */}
@@ -1020,7 +1061,7 @@ export function DashboardPage({
           </div>
           <button
             type="button"
-            onClick={onGoToDebts}
+            onClick={() => (onGoToSessions ? onGoToSessions('ALL') : onGoToDebts())}
             className="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
           >
             Xem tất cả →
@@ -1031,7 +1072,12 @@ export function DashboardPage({
         ) : (
           <div className="divide-y divide-slate-100">
             {recentSessions.map((s) => (
-              <div key={s.session_id} className="px-4 py-3 flex items-center justify-between gap-3">
+              <button
+                key={s.session_id}
+                type="button"
+                onClick={() => (onGoToSessions ? onGoToSessions(s.type) : onGoToDebts())}
+                className="w-full text-left px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 active:bg-slate-100/80 transition cursor-pointer"
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span
@@ -1059,7 +1105,7 @@ export function DashboardPage({
                     {s.per_person_amount > 0 ? ` • ${formatVND(s.per_person_amount)}/ng` : ''}
                   </p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
