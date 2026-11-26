@@ -508,13 +508,23 @@ export function CreateSessionPage({
     if (!idToken || submitting) return;
 
     const totalAttendeeCount = selectedIds.length + selectedQuickGuests.length;
-    if (totalAttendeeCount === 0) {
+    const isFutureOrTodayAdhoc =
+      sessionType === 'BADMINTON' &&
+      billingMode === 'AD_HOC' &&
+      date >= getTodayDateStr();
+
+    if (totalAttendeeCount === 0 && !isFutureOrTodayAdhoc) {
       setErrorMsg('Vui lòng chọn ít nhất 1 người tham gia.');
       return;
     }
 
-    if (sessionType === 'BADMINTON' && billingMode === 'AD_HOC' && badmintonCost.totalAmount <= 0) {
-      setErrorMsg('Buổi cầu phát sinh cần có tổng tiền buổi > 0đ.');
+    if (
+      sessionType === 'BADMINTON' &&
+      billingMode === 'AD_HOC' &&
+      badmintonCost.totalAmount <= 0 &&
+      !isFutureOrTodayAdhoc
+    ) {
+      setErrorMsg('Buổi cầu phát sinh đã qua cần có tổng tiền buổi > 0đ.');
       return;
     }
 
@@ -1550,6 +1560,13 @@ export function CreateSessionPage({
         {sessionType === 'BADMINTON' ? (
           billingMode === 'AD_HOC' ? (
             <div className="space-y-1.5 text-xs">
+              {date >= getTodayDateStr() &&
+                (totalBadmintonAttendees === 0 || badmintonCost.totalAmount === 0) && (
+                  <p className="rounded-xl bg-sky-50 border border-sky-200 px-3 py-2 text-[11px] text-sky-900">
+                    Buổi phát sinh hôm nay / sắp tới có thể lưu trước với <strong>0đ</strong> &amp;{' '}
+                    <strong>chưa chọn người chơi</strong>, sau khi đánh xong bấm <strong>Sửa</strong> để chốt.
+                  </p>
+                )}
               <p className="text-sky-800 font-medium">
                 Buổi phát sinh chia đều ({totalBadmintonAttendees} người):{' '}
                 <span className="font-extrabold">{formatVND(adhocPerPerson)}/người</span>

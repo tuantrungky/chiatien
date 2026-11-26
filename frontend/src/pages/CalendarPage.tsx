@@ -796,6 +796,11 @@ export function CalendarPage({
                         ? s.total_amount > 0
                           ? `Thêm giờ: ${formatVND(s.total_amount)}`
                           : 'Theo lịch (0đ)'
+                        : s.type === 'BADMINTON' &&
+                          s.billing_mode === 'AD_HOC' &&
+                          s.total_amount === 0 &&
+                          s.attendee_count === 0
+                        ? 'Dự kiến (0đ)'
                         : formatVND(s.total_amount)}
                     </span>
                     {isEditor && onEditSession && (

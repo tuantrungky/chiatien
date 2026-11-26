@@ -1009,7 +1009,14 @@ export function DebtsAndSessionsPage({
                             {s.attendee_count} người
                           </span>
 
-                          {unpaidCount === 0 ? (
+                          {isBadminton &&
+                          s.billing_mode === 'AD_HOC' &&
+                          s.total_amount === 0 &&
+                          s.attendee_count === 0 ? (
+                            <span className="text-xs font-semibold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg">
+                              Chưa chốt / Dự kiến
+                            </span>
+                          ) : unpaidCount === 0 ? (
                             <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
                               {isBadminton
                                 ? s.billing_mode === 'AD_HOC'
