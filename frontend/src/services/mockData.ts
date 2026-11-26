@@ -524,6 +524,13 @@ export const initialMockMonthlyBills: MonthlyBill[] = [
     status: 'CLOSED',
     created_by: 'tuantrungky@gmail.com',
     closed_at: '2026-10-31T22:00:00+07:00',
+    court_fee: 1150000,
+    shuttle_tube_qty: 1,
+    shuttle_tube_price: 250000,
+    shuttle_tube_amount: 250000,
+    prev_overtime_fee: 0,
+    shuttle_contributions: '[]',
+    applied_credits_total: 0,
   },
   {
     month: '2026-11',
@@ -540,6 +547,24 @@ export const initialMockMonthlyBills: MonthlyBill[] = [
     status: 'OPEN',
     created_by: 'tuantrungky@gmail.com',
     closed_at: '',
+    court_fee: 900000,
+    shuttle_tube_qty: 2,
+    shuttle_tube_price: 250000,
+    shuttle_tube_amount: 500000,
+    prev_overtime_fee: 0,
+    shuttle_contributions: JSON.stringify([
+      {
+        id: 'CNT_MOCK_1',
+        member_id: 'MEM_002',
+        member_name: 'Tuấn',
+        tube_qty: 1,
+        unit_price: 260000,
+        amount: 260000,
+        note: 'Ống cầu Thành Công',
+        created_at: '2026-11-20T20:00:00+07:00',
+      },
+    ]),
+    applied_credits_total: 0,
   },
 ];
 

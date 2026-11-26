@@ -137,7 +137,15 @@ var SHEET_SCHEMA = {
     'status',
     'created_by',
     'closed_at',
-    'updated_at'
+    'updated_at',
+    'court_fee',
+    'shuttle_tube_qty',
+    'shuttle_tube_price',
+    'shuttle_tube_amount',
+    'prev_overtime_fee',
+    'bill_detail',
+    'shuttle_contributions',
+    'applied_credits_total'
   ],
   Monthly_Dues: [
     'due_id',
@@ -146,7 +154,10 @@ var SHEET_SCHEMA = {
     'amount',
     'is_paid',
     'paid_at',
-    'confirmed_by'
+    'confirmed_by',
+    'base_amount',
+    'credit_amount',
+    'credit_note'
   ],
   Session_Items: [
     'item_id',
@@ -1074,6 +1085,9 @@ function computeDebtsData() {
       member_id: dmId,
       member_name: dmName,
       amount: dAmt,
+      base_amount: toInt_(d.base_amount, dAmt),
+      credit_amount: toInt_(d.credit_amount, 0),
+      credit_note: String(d.credit_note || '').trim(),
       is_paid: false,
       paid_at: '',
       transferContent: dContent,
@@ -1480,6 +1494,42 @@ function updateScheduleDayRecord(payload) {
 // MONTHLY BILLS & DUES (CẦU LÔNG THU ĐẦU THÁNG, CỘNG/TRỪ THÁNG SAU)
 // ============================================================================
 
+function parseJsonSafe_(raw, fallback) {
+  if (!raw || typeof raw !== 'string') return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function normalizeContributionsList_(rawList, membersMap) {
+  if (!Array.isArray(rawList)) return [];
+  var out = [];
+  for (var i = 0; i < rawList.length; i++) {
+    var it = rawList[i] || {};
+    var mId = String(it.member_id || it.memberId || '').trim();
+    if (!mId) continue;
+    var qty = Math.max(0, toFloat_(it.tube_qty !== undefined ? it.tube_qty : it.tubeQty, 0));
+    var unitPrice = Math.max(0, toInt_(it.unit_price !== undefined ? it.unit_price : it.unitPrice, 0));
+    var rawAmt = it.amount !== undefined && it.amount !== '' && it.amount !== null ? toInt_(it.amount, 0) : Math.round(qty * unitPrice);
+    var amount = Math.max(0, rawAmt);
+    if (amount <= 0 && qty <= 0) continue;
+    var mName = String(it.member_name || it.memberName || (membersMap && membersMap[mId] ? membersMap[mId].name : mId)).trim();
+    out.push({
+      id: String(it.id || generateId_('CNT') + '_' + i),
+      member_id: mId,
+      member_name: mName,
+      tube_qty: qty,
+      unit_price: unitPrice,
+      amount: amount,
+      note: String(it.note || '').trim(),
+      created_at: String(it.created_at || nowIso_())
+    });
+  }
+  return out;
+}
+
 function getMonthlyBillData(monthStr) {
   var targetMonth = (monthStr && /^\d{4}-\d{2}$/.test(monthStr.trim()))
     ? monthStr.trim()
@@ -1572,6 +1622,9 @@ function getMonthlyBillData(monthStr) {
       member_id: dmId,
       member_name: dmName,
       amount: dAmt,
+      base_amount: toInt_(d.base_amount, dAmt),
+      credit_amount: toInt_(d.credit_amount, 0),
+      credit_note: String(d.credit_note || '').trim(),
       is_paid: toBoolean_(d.is_paid),
       paid_at: String(d.paid_at || ''),
       transferContent: dContent,
@@ -1588,6 +1641,15 @@ function getMonthlyBillData(monthStr) {
   var status = billRow ? String(billRow.status || 'OPEN').toUpperCase() : 'OPEN';
   var carryOut = carryIn + billedTotal + guestPaidAmount - actualCost;
 
+  var contributions = normalizeContributionsList_(
+    billRow ? parseJsonSafe_(String(billRow.shuttle_contributions || ''), []) : [],
+    membersMap
+  );
+  var prevMonthContributions = normalizeContributionsList_(
+    prevBillRow ? parseJsonSafe_(String(prevBillRow.shuttle_contributions || ''), []) : [],
+    membersMap
+  );
+
   var bill = {
     month: targetMonth,
     estimate: estimate,
@@ -1602,7 +1664,15 @@ function getMonthlyBillData(monthStr) {
     carry_out: carryOut,
     status: status,
     created_by: billRow ? String(billRow.created_by || '') : '',
-    closed_at: billRow ? String(billRow.closed_at || '') : ''
+    closed_at: billRow ? String(billRow.closed_at || '') : '',
+    court_fee: billRow ? toInt_(billRow.court_fee, estimate) : suggestedEstimate,
+    shuttle_tube_qty: billRow ? toFloat_(billRow.shuttle_tube_qty, 0) : 0,
+    shuttle_tube_price: billRow ? toInt_(billRow.shuttle_tube_price, 0) : 0,
+    shuttle_tube_amount: billRow ? toInt_(billRow.shuttle_tube_amount, 0) : 0,
+    prev_overtime_fee: billRow ? toInt_(billRow.prev_overtime_fee, 0) : 0,
+    bill_detail: billRow ? String(billRow.bill_detail || '') : '',
+    shuttle_contributions: billRow ? String(billRow.shuttle_contributions || '') : '',
+    applied_credits_total: billRow ? toInt_(billRow.applied_credits_total, 0) : 0
   };
 
   return {
@@ -1615,7 +1685,9 @@ function getMonthlyBillData(monthStr) {
       paidAmount: guestPaidAmount,
       unpaidAmount: guestUnpaidAmount
     },
-    suggestedEstimateFromSchedule: suggestedEstimate
+    suggestedEstimateFromSchedule: suggestedEstimate,
+    contributions: contributions,
+    prevMonthContributions: prevMonthContributions
   };
 }
 
@@ -1627,11 +1699,26 @@ function issueMonthlyBillRecord(payload, editorEmail) {
   }
 
   var settings = getSettingsMap();
+  var members = getMembersList(false);
+  var membersMap = buildMembersMap_(members);
   var unit = settings.rounding_unit || 1000;
-  var estimate = Math.max(0, toInt_(p.estimate, 0));
+
+  var courtFee = Math.max(0, toInt_(p.courtFee !== undefined ? p.courtFee : p.court_fee, 0));
+  var shuttleTubeQty = Math.max(0, toFloat_(p.shuttleTubeQty !== undefined ? p.shuttleTubeQty : p.shuttle_tube_qty, 0));
+  var shuttleTubePrice = Math.max(0, toInt_(p.shuttleTubePrice !== undefined ? p.shuttleTubePrice : p.shuttle_tube_price, 0));
+  var shuttleTubeAmount = (p.shuttleTubeAmount !== undefined || p.shuttle_tube_amount !== undefined)
+    ? Math.max(0, toInt_(p.shuttleTubeAmount !== undefined ? p.shuttleTubeAmount : p.shuttle_tube_amount, 0))
+    : Math.round(shuttleTubeQty * shuttleTubePrice);
+  var prevOvertimeFee = Math.max(0, toInt_(p.prevOvertimeFee !== undefined ? p.prevOvertimeFee : p.prev_overtime_fee, 0));
+
+  var computedEstimate = courtFee + shuttleTubeAmount + prevOvertimeFee;
+  var estimate = (p.estimate !== undefined && p.estimate !== null && p.estimate !== '')
+    ? Math.max(0, toInt_(p.estimate, computedEstimate))
+    : computedEstimate;
+
   var memberIds = Array.isArray(p.memberIds || p.member_ids) ? (p.memberIds || p.member_ids) : [];
   if (memberIds.length === 0) {
-    var mains = getMembersList(true).filter(function (m) { return m.type === 'MAIN'; });
+    var mains = members.filter(function (m) { return m.is_active && m.type === 'MAIN'; });
     memberIds = mains.map(function (m) { return m.member_id; });
   }
   if (memberIds.length === 0) {
@@ -1639,13 +1726,31 @@ function issueMonthlyBillRecord(payload, editorEmail) {
   }
 
   var currentData = getMonthlyBillData(targetMonth);
-  var carryIn = currentData.bill.carry_in;
-  var toCollect = Math.max(0, estimate - carryIn);
-  var perMember = toCollect > 0
-    ? Math.ceil(toCollect / memberIds.length / unit) * unit
+  var carryIn = (p.carryIn !== undefined && p.carryIn !== null && p.carryIn !== '')
+    ? toInt_(p.carryIn, currentData.bill.carry_in)
+    : currentData.bill.carry_in;
+
+  var appliedCredits = normalizeContributionsList_(
+    p.appliedCredits !== undefined ? p.appliedCredits : currentData.prevMonthContributions,
+    membersMap
+  );
+  var appliedCreditsTotal = 0;
+  var creditByMember = {};
+  var creditNotesByMember = {};
+  for (var ci = 0; ci < appliedCredits.length; ci++) {
+    var cr = appliedCredits[ci];
+    appliedCreditsTotal += cr.amount;
+    creditByMember[cr.member_id] = (creditByMember[cr.member_id] || 0) + cr.amount;
+    var labelPart = (cr.tube_qty > 0 ? cr.tube_qty + ' ống' : 'góp cầu') + ' (' + cr.amount.toLocaleString('vi-VN') + 'đ)';
+    if (!creditNotesByMember[cr.member_id]) creditNotesByMember[cr.member_id] = [];
+    creditNotesByMember[cr.member_id].push(cr.note ? cr.note + ' - ' + labelPart : labelPart);
+  }
+
+  var grossToDistribute = Math.max(0, estimate + appliedCreditsTotal - carryIn);
+  var perMember = grossToDistribute > 0
+    ? Math.ceil(grossToDistribute / memberIds.length / unit) * unit
     : 0;
-  var billedTotal = perMember * memberIds.length;
-  var carryOut = carryIn + billedTotal + currentData.bill.guest_income - currentData.bill.actual_cost;
+  var toCollect = Math.max(0, estimate - carryIn);
   var now = nowIso_();
 
   // Giữ trạng thái is_paid của thành viên đã đóng trước đó nếu phát hành lại hóa đơn tháng
@@ -1660,21 +1765,40 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     return String(row.month || '').trim() === targetMonth;
   });
 
+  var billedTotal = 0;
   var duesToAppend = [];
   for (var j = 0; j < memberIds.length; j++) {
     var mId = String(memberIds[j]).trim();
     var oldPaid = oldPaidMap[mId];
+    var creditAmt = creditByMember[mId] || 0;
+    var netDue = Math.max(0, perMember - creditAmt);
+    var excess = creditAmt > perMember ? creditAmt - perMember : 0;
+    var creditNoteStr = '';
+    if (creditAmt > 0) {
+      creditNoteStr = 'Trừ góp cầu: ' + (creditNotesByMember[mId] || []).join(', ');
+      if (excess > 0) creditNoteStr += ' (Còn dư ' + excess.toLocaleString('vi-VN') + 'đ)';
+    }
+    billedTotal += netDue;
+
     duesToAppend.push({
       due_id: generateId_('DUE') + '_' + j,
       month: targetMonth,
       member_id: mId,
-      amount: perMember,
-      is_paid: oldPaid ? true : (perMember === 0),
-      paid_at: oldPaid ? String(oldPaid.paid_at || now) : (perMember === 0 ? now : ''),
-      confirmed_by: oldPaid ? String(oldPaid.confirmed_by || editorEmail) : (perMember === 0 ? editorEmail : '')
+      amount: netDue,
+      base_amount: perMember,
+      credit_amount: creditAmt,
+      credit_note: creditNoteStr,
+      is_paid: oldPaid ? true : (netDue === 0),
+      paid_at: oldPaid ? String(oldPaid.paid_at || now) : (netDue === 0 ? now : ''),
+      confirmed_by: oldPaid ? String(oldPaid.confirmed_by || editorEmail) : (netDue === 0 ? editorEmail : '')
     });
   }
   appendObjects_('Monthly_Dues', duesToAppend);
+
+  var carryOut = carryIn + billedTotal + currentData.bill.guest_income - currentData.bill.actual_cost;
+  var billDetailObj = (p.billDetail && typeof p.billDetail === 'object') ? p.billDetail : {};
+  billDetailObj.appliedCredits = appliedCredits;
+  var billDetailStr = JSON.stringify(billDetailObj);
 
   var billExists = getSheetObjects_('Monthly_Bills').some(function (b) {
     return String(b.month || '').trim() === targetMonth;
@@ -1694,6 +1818,13 @@ function issueMonthlyBillRecord(payload, editorEmail) {
         row.guest_income = currentData.bill.guest_income;
         row.carry_out = carryOut;
         row.status = 'OPEN';
+        row.court_fee = courtFee;
+        row.shuttle_tube_qty = shuttleTubeQty;
+        row.shuttle_tube_price = shuttleTubePrice;
+        row.shuttle_tube_amount = shuttleTubeAmount;
+        row.prev_overtime_fee = prevOvertimeFee;
+        row.bill_detail = billDetailStr;
+        row.applied_credits_total = appliedCreditsTotal;
         row.updated_at = now;
         return row;
       }
@@ -1714,7 +1845,73 @@ function issueMonthlyBillRecord(payload, editorEmail) {
       status: 'OPEN',
       created_by: editorEmail,
       closed_at: '',
-      updated_at: now
+      updated_at: now,
+      court_fee: courtFee,
+      shuttle_tube_qty: shuttleTubeQty,
+      shuttle_tube_price: shuttleTubePrice,
+      shuttle_tube_amount: shuttleTubeAmount,
+      prev_overtime_fee: prevOvertimeFee,
+      bill_detail: billDetailStr,
+      shuttle_contributions: '[]',
+      applied_credits_total: appliedCreditsTotal
+    }]);
+  }
+
+  return getMonthlyBillData(targetMonth);
+}
+
+function saveMonthlyContributionsRecord(payload, editorEmail) {
+  var p = payload || {};
+  var targetMonth = String(p.month || todayDateStr_().slice(0, 7)).trim();
+  if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
+    throw createAppError_('BAD_REQUEST', 'month phải đúng định dạng YYYY-MM.');
+  }
+
+  var membersMap = buildMembersMap_(getMembersList(false));
+  var normalized = normalizeContributionsList_(p.contributions || [], membersMap);
+  var serialized = JSON.stringify(normalized);
+  var now = nowIso_();
+
+  var billExists = getSheetObjects_('Monthly_Bills').some(function (b) {
+    return String(b.month || '').trim() === targetMonth;
+  });
+
+  if (billExists) {
+    updateRowsByCondition_(
+      'Monthly_Bills',
+      function (row) { return String(row.month || '').trim() === targetMonth; },
+      function (row) {
+        row.shuttle_contributions = serialized;
+        row.updated_at = now;
+        return row;
+      }
+    );
+  } else {
+    var current = getMonthlyBillData(targetMonth);
+    appendObjects_('Monthly_Bills', [{
+      month: targetMonth,
+      estimate: current.bill.estimate,
+      carry_in: current.bill.carry_in,
+      to_collect: current.bill.to_collect,
+      member_count: 0,
+      per_member: 0,
+      billed_total: 0,
+      actual_cost: current.bill.actual_cost,
+      actual_cost_override: '',
+      guest_income: current.bill.guest_income,
+      carry_out: current.bill.carry_out,
+      status: 'OPEN',
+      created_by: editorEmail,
+      closed_at: '',
+      updated_at: now,
+      court_fee: current.bill.court_fee || 0,
+      shuttle_tube_qty: 0,
+      shuttle_tube_price: 0,
+      shuttle_tube_amount: 0,
+      prev_overtime_fee: 0,
+      bill_detail: '',
+      shuttle_contributions: serialized,
+      applied_credits_total: 0
     }]);
   }
 

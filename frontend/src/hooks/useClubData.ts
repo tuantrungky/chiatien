@@ -15,7 +15,7 @@ import type {
 import { getTodayDateStr } from '../utils/dateFilters';
 import { simplifyDebts } from '../utils/debtSimplifier';
 
-const SWR_PREFIX = 'cln_swr_v3';
+const SWR_PREFIX = 'cln_swr_v4';
 
 interface SwrCachePayload {
   data: AllDataResponse;

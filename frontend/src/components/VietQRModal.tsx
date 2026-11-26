@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, Check, Copy, Download, QrCode, X } from 'lucide-react';
+import { AlertCircle, Check, Copy, Download, X } from 'lucide-react';
 import { formatVND } from '../utils/vietqr';
 
 export interface VietQRModalData {
@@ -86,9 +86,11 @@ export function VietQRModal({ data, onClose }: VietQRModalProps) {
         {/* Header */}
         <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-100 px-4 py-3.5 flex items-center justify-between gap-3 rounded-t-3xl sm:rounded-t-2xl">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-              <QrCode className="w-5 h-5" />
-            </div>
+            <img
+              src="/logo.jpg"
+              alt="Lông Ca Club"
+              className="w-9 h-9 rounded-full bg-white p-0.5 object-cover ring-1 ring-sky-200 shrink-0"
+            />
             <div className="min-w-0">
               <h3 className="text-sm font-bold text-slate-900 truncate">{data.title}</h3>
               {data.subtitle && <p className="text-xs text-slate-500 truncate">{data.subtitle}</p>}

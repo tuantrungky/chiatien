@@ -131,13 +131,16 @@ caulong-nhau/
 
 #### C. Hóa đơn Cầu lông theo tháng (`Monthly_Bills` & `Monthly_Dues`) — Thay cho quỹ cố định cũ
 1. **Phát hành đầu tháng (`issueMonthlyBill`):**
-   - `estimate`: Ước tính tiền sân + cầu cả tháng (hệ thống gợi ý sẵn từ `Schedule` + `Settings.court_price_per_hour` + ước lượng cầu).
+   - Hỗ trợ tách chi tiết theo báo giá chủ sân: `Tổng hóa đơn chủ sân = Tiền sân (court_fee) + (Số ống cầu * Giá/ống) + Tiền thêm giờ tháng trước (prev_overtime_fee)`. Editor có thể sửa tay toàn bộ từng ô (kể cả ghi đè tổng tiền theo con số chủ sân đưa ra hoặc sửa tay `carry_in`).
    - `carry_in`: Lấy từ `carry_out` của tháng trước (`0` nếu tháng trước chưa có).
-   - `to_collect = Math.max(0, estimate - carry_in)`.
-   - Chia đều cho `memberCount` thành viên `MAIN` được chọn đóng tháng đó, làm tròn lên theo `unit = rounding_unit` (mặc định `1000`):
-     $$\text{per\_member} = \text{Math.ceil}\left(\frac{\text{to\_collect}}{\text{member\_count} \times \text{unit}}\right) \times \text{unit}$$
-   - `billed_total = per_member * member_count`.
-   - Sinh các dòng tương ứng trong tab `Monthly_Dues` với `amount = per_member` (bảo toàn trạng thái `is_paid = TRUE` nếu thành viên đó đã đóng trước khi chỉnh sửa lại hóa đơn tháng).
+   - **Khấu trừ người góp ống cầu tháng trước (`appliedCredits`):**
+     - Trong tháng, Editor ghi nhận ai mua/góp bao nhiêu ống cầu với giá riêng tự nhập (`saveMonthlyContributions` lưu JSON trong `Monthly_Bills.shuttle_contributions`).
+     - Khi phát hành hóa đơn đầu tháng sau, hệ thống tự nạp các khoản góp cầu từ tháng trước để tính:
+       $$\text{grossToDistribute} = \max(0, \text{estimate} + \text{appliedCreditsTotal} - \text{carry\_in})$$
+       $$\text{per\_member} = \text{Math.ceil}\left(\frac{\text{grossToDistribute}}{\text{member\_count} \times \text{unit}}\right) \times \text{unit}$$
+       $$\text{netDue}[m] = \max(0, \text{per\_member} - \text{creditAmount}[m])$$
+     - `billed_total = sum(netDue[m])` (tổng tiền mặt thực thu về tay Thủ quỹ), đảm bảo tổng thu từ thành viên khớp với số tiền cần trả chủ sân (`to_collect = max(0, estimate - carry_in)`).
+     - Sinh các dòng trong `Monthly_Dues` với `amount = netDue`, `base_amount = per_member`, `credit_amount`, `credit_note` (tự động `is_paid = TRUE` nếu `netDue === 0`).
 2. **Khách vãng lai (`GUEST`) đi đánh Cầu lông:**
    - Khi điểm danh buổi `BADMINTON`, thành viên `MAIN` có `fee_amount = 0`, `is_paid = TRUE`.
    - Thành viên `GUEST` có `fee_amount = session.guest_fee`, `creditor_id = treasurer_member_id`, `net_amount = fee_amount` (hoặc `0` nếu tích *"Đã đóng ngay"*).
@@ -222,10 +225,10 @@ Quy ước chung:
 `plan_id`, `date` (`YYYY-MM-DD`), `start_time` (`HH:mm`), `end_time` (`HH:mm`), `courts`, `planned_member_ids` (comma-separated), `status` (`PLANNED` | `DONE` | `CANCELLED`), `session_id`, `note`, `created_at`, `updated_at`
 
 ### 6.6. Tab `Monthly_Bills` (Hóa đơn Cầu lông hàng tháng)
-`month` (`YYYY-MM`), `estimate`, `carry_in`, `to_collect`, `member_count`, `per_member`, `billed_total`, `actual_cost`, `actual_cost_override`, `guest_income`, `carry_out`, `status` (`OPEN` | `CLOSED`), `created_by`, `closed_at`, `updated_at`
+`month` (`YYYY-MM`), `estimate`, `carry_in`, `to_collect`, `member_count`, `per_member`, `billed_total`, `actual_cost`, `actual_cost_override`, `guest_income`, `carry_out`, `status` (`OPEN` | `CLOSED`), `created_by`, `closed_at`, `updated_at`, `court_fee`, `shuttle_tube_qty`, `shuttle_tube_price`, `shuttle_tube_amount`, `prev_overtime_fee`, `bill_detail` (JSON), `shuttle_contributions` (JSON), `applied_credits_total`
 
 ### 6.7. Tab `Monthly_Dues` (Khoản đóng tiền cầu theo tháng của từng `MAIN`)
-`due_id`, `month` (`YYYY-MM`), `member_id`, `amount`, `is_paid`, `paid_at`, `confirmed_by`
+`due_id`, `month` (`YYYY-MM`), `member_id`, `amount`, `is_paid`, `paid_at`, `confirmed_by`, `base_amount`, `credit_amount`, `credit_note`
 
 ### 6.8. Tab `Settlements` (Lịch sử gạch nợ)
 `settlement_id`, `from_member_id`, `to_member_id`, `amount`, `settled_at`, `method`, `category` (`BADMINTON` | `DRINKING`), `source_attendance_ids`, `source_ledger_ids`, `is_reconciled`, `transfer_content`, `note`, `confirmed_by`
@@ -266,7 +269,7 @@ Cấu hình các khóa mặc định:
   - Buổi chơi: `createSession`, `updateSession`, `deleteSession`.
   - Thanh toán: `confirmPayment` (alias `confirmSettlement`).
   - Lịch tháng: `generateSchedule`, `updateScheduleDay`.
-  - Hóa đơn Cầu lông tháng: `issueMonthlyBill`, `markDuePaid`, `closeMonth`.
+  - Hóa đơn Cầu lông tháng: `issueMonthlyBill`, `saveMonthlyContributions`, `markDuePaid`, `closeMonth`.
   - Thành viên & Cài đặt: `upsertMember`, `updateSettings`.
   - AI Hóa đơn: `parseBillAI` (alias `parseReceipt`).
 

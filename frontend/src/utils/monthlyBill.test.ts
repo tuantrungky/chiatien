@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateMonthlyBill } from './monthlyBill';
+import { calculateDetailedMonthlyBill, calculateMonthlyBill } from './monthlyBill';
 
 describe('monthlyBill', () => {
   it('Tháng đầu: dự toán 3.000.000 / 10 MAIN -> 300.000/người; thực chi 2.800.000 + vãng lai 400.000 -> dư ra 600.000', () => {
@@ -62,5 +62,93 @@ describe('monthlyBill', () => {
     expect(res.toCollect).toBe(0);
     expect(res.perMember).toBe(0);
     expect(res.carryOut).toBe(650000);
+  });
+
+  it('Chi tiết hóa đơn: Tiền sân + SL*Giá ống + Thêm giờ T.trước, hỗ trợ ghi đè tổng chủ sân', () => {
+    const auto = calculateDetailedMonthlyBill({
+      courtFee: 1800000,
+      shuttleTubeQty: 4,
+      shuttleTubePrice: 250000,
+      prevOvertimeFee: 200000,
+      carryIn: 0,
+      memberIds: ['M1', 'M2', 'M3', 'M4'],
+      roundingUnit: 1000,
+    });
+
+    expect(auto.shuttleTubeAmount).toBe(1000000);
+    expect(auto.venueTotal).toBe(3000000);
+    expect(auto.perMember).toBe(750000);
+    expect(auto.billedTotal).toBe(3000000);
+
+    const overridden = calculateDetailedMonthlyBill({
+      courtFee: 1800000,
+      shuttleTubeQty: 4,
+      shuttleTubePrice: 250000,
+      prevOvertimeFee: 200000,
+      venueTotalOverride: true,
+      manualVenueTotal: 2950000,
+      carryIn: 150000,
+      memberIds: ['M1', 'M2', 'M3', 'M4'],
+      roundingUnit: 1000,
+    });
+    expect(overridden.venueTotal).toBe(2950000);
+    expect(overridden.toCollect).toBe(2800000);
+    expect(overridden.perMember).toBe(700000);
+  });
+
+  it('Trừ tiền góp ống cầu tháng trước cho người góp vào tiền đóng đầu tháng tới', () => {
+    // Tổng hóa đơn chủ sân = 2.500.000đ. Tuấn góp 2 ống * 250.000 = 500.000đ -> tổng chi nhóm 3.000.000đ / 4 = 750.000đ/ng
+    // Tuấn đóng: 750k - 500k = 250k; 3 người còn lại đóng 750k -> Tổng thu về Thủ quỹ = 2.500.000đ (vừa khít chủ sân)
+    const res = calculateDetailedMonthlyBill({
+      courtFee: 2000000,
+      shuttleTubeQty: 2,
+      shuttleTubePrice: 200000,
+      prevOvertimeFee: 100000,
+      carryIn: 0,
+      memberIds: ['TUAN', 'THAO', 'CHUNG', 'QUYEN'],
+      appliedCredits: [
+        {
+          id: 'C1',
+          member_id: 'TUAN',
+          member_name: 'Tuấn',
+          tube_qty: 2,
+          unit_price: 250000,
+          amount: 500000,
+          note: 'Cầu Lining',
+        },
+      ],
+      roundingUnit: 1000,
+    });
+
+    expect(res.venueTotal).toBe(2500000);
+    expect(res.appliedCreditsTotal).toBe(500000);
+    expect(res.perMember).toBe(750000);
+    expect(res.billedTotal).toBe(2500000);
+
+    const tuanDue = res.memberDues.find((d) => d.memberId === 'TUAN')!;
+    const thaoDue = res.memberDues.find((d) => d.memberId === 'THAO')!;
+    expect(tuanDue.netAmount).toBe(250000);
+    expect(tuanDue.creditAmount).toBe(500000);
+    expect(thaoDue.netAmount).toBe(750000);
+  });
+
+  it('Góp cầu lớn hơn phần đóng tháng -> netAmount = 0 và ghi nhận phần dư', () => {
+    const res = calculateDetailedMonthlyBill({
+      courtFee: 1000000,
+      shuttleTubeQty: 0,
+      shuttleTubePrice: 0,
+      prevOvertimeFee: 0,
+      carryIn: 0,
+      memberIds: ['TUAN', 'THAO', 'CHUNG', 'QUYEN'],
+      appliedCredits: [
+        { id: 'C1', member_id: 'TUAN', tube_qty: 3, unit_price: 280000, amount: 840000 },
+      ],
+      roundingUnit: 1000,
+    });
+
+    const tuanDue = res.memberDues.find((d) => d.memberId === 'TUAN')!;
+    expect(res.perMember).toBe(460000); // ceil((1.000.000 + 840.000) / 4) = 460.000
+    expect(tuanDue.netAmount).toBe(0);
+    expect(tuanDue.remainingCredit).toBe(380000);
   });
 });

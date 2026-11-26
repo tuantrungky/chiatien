@@ -131,6 +131,25 @@ export interface ScheduleDay {
   updated_at?: string;
 }
 
+export interface ShuttleContributionItem {
+  id: string;
+  member_id: string;
+  member_name?: string;
+  tube_qty: number;
+  unit_price: number;
+  amount: number;
+  note?: string;
+  created_at?: string;
+}
+
+export interface MonthlyBillDetail {
+  shuttleAmountOverride?: boolean;
+  venueTotalOverride?: boolean;
+  carryInOverride?: boolean;
+  appliedCredits?: ShuttleContributionItem[];
+  note?: string;
+}
+
 export interface MonthlyBill {
   month: string; // YYYY-MM
   estimate: number;
@@ -147,6 +166,14 @@ export interface MonthlyBill {
   created_by: string;
   closed_at: string;
   updated_at?: string;
+  court_fee?: number;
+  shuttle_tube_qty?: number;
+  shuttle_tube_price?: number;
+  shuttle_tube_amount?: number;
+  prev_overtime_fee?: number;
+  bill_detail?: string;
+  shuttle_contributions?: string;
+  applied_credits_total?: number;
 }
 
 export interface MonthlyDue {
@@ -155,6 +182,9 @@ export interface MonthlyDue {
   member_id: string;
   member_name?: string;
   amount: number;
+  base_amount?: number;
+  credit_amount?: number;
+  credit_note?: string;
   is_paid: boolean;
   paid_at: string;
   confirmed_by: string;
@@ -287,6 +317,9 @@ export interface BadmintonMonthlyDueItem {
   member_id: string;
   member_name: string;
   amount: number;
+  base_amount?: number;
+  credit_amount?: number;
+  credit_note?: string;
   is_paid: boolean;
   paid_at: string;
   transferContent: string;
@@ -410,6 +443,8 @@ export interface MonthlyBillData {
     unpaidAmount: number;
   };
   suggestedEstimateFromSchedule: number;
+  contributions?: ShuttleContributionItem[];
+  prevMonthContributions?: ShuttleContributionItem[];
 }
 
 export interface GuestStatSessionItem {
@@ -605,6 +640,27 @@ export interface IssueMonthlyBillPayload {
   month: string;
   estimate: number;
   memberIds: string[];
+  courtFee?: number;
+  shuttleTubeQty?: number;
+  shuttleTubePrice?: number;
+  shuttleTubeAmount?: number;
+  prevOvertimeFee?: number;
+  carryIn?: number;
+  appliedCredits?: ShuttleContributionItem[];
+  billDetail?: MonthlyBillDetail;
+}
+
+export interface SaveMonthlyContributionsPayload {
+  month: string;
+  contributions: Array<{
+    id?: string;
+    member_id: string;
+    member_name?: string;
+    tube_qty: number;
+    unit_price: number;
+    amount?: number;
+    note?: string;
+  }>;
 }
 
 export interface MarkDuePaidPayload {

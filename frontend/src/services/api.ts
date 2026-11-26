@@ -29,10 +29,12 @@ import type {
   MonthlyBillData,
   ParseBillAIResponse,
   PeriodType,
+  SaveMonthlyContributionsPayload,
   ScheduleData,
   SeparatedDebtsData,
   SessionDetailData,
   SettingsMap,
+  ShuttleContributionItem,
   UpdateScheduleDayPayload,
   UpdateSessionPayload,
   UpdateSettingsPayload,
@@ -43,7 +45,7 @@ import { getPeriodRange, getTodayDateStr } from '../utils/dateFilters';
 import { calculateAdhocPerPerson } from '../utils/badmintonCost';
 import { buildBadmintonDues, simplifyDebts } from '../utils/debtSimplifier';
 import { calculateDrinkingSplit } from '../utils/drinkingSplit';
-import { calculateMonthlyBill } from '../utils/monthlyBill';
+import { calculateDetailedMonthlyBill, calculateMonthlyBill } from '../utils/monthlyBill';
 import { estimateCourtCostFromSchedule, generateMonthScheduleDates } from '../utils/schedule';
 import {
   initialMockAttendances,
@@ -165,6 +167,16 @@ function buildMockSchedule(month: string): ScheduleData {
   return { month, days };
 }
 
+function parseContributionsSafe(raw?: string): ShuttleContributionItem[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
 function buildMockMonthlyBill(month: string): MonthlyBillData {
   const billRow = mockState.monthlyBills.find((b) => b.month === month);
   const prevRow = mockState.monthlyBills.find((b) => b.month === prevMonthStr(month));
@@ -232,6 +244,14 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     status: billRow ? billRow.status : ('OPEN' as const),
     created_by: billRow ? billRow.created_by : '',
     closed_at: billRow ? billRow.closed_at : '',
+    court_fee: billRow?.court_fee ?? suggestedEstimate,
+    shuttle_tube_qty: billRow?.shuttle_tube_qty ?? 0,
+    shuttle_tube_price: billRow?.shuttle_tube_price ?? 0,
+    shuttle_tube_amount: billRow?.shuttle_tube_amount ?? 0,
+    prev_overtime_fee: billRow?.prev_overtime_fee ?? 0,
+    bill_detail: billRow?.bill_detail ?? '',
+    shuttle_contributions: billRow?.shuttle_contributions ?? '[]',
+    applied_credits_total: billRow?.applied_credits_total ?? 0,
   };
 
   const duesRaw = mockState.monthlyDues.filter((d) => d.month === month);
@@ -254,6 +274,9 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
       member_id: d.member_id,
       member_name: mockState.members.find((m) => m.member_id === d.member_id)?.name || d.member_id,
       amount: d.amount,
+      base_amount: d.base_amount ?? d.amount,
+      credit_amount: d.credit_amount ?? 0,
+      credit_note: d.credit_note || '',
       is_paid: d.is_paid,
       paid_at: d.paid_at,
       transferContent: qr?.transferContent || '',
@@ -268,6 +291,8 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     sessions: sessionsInMonth,
     guestIncomeDetail: { paidCount, paidAmount, unpaidAmount },
     suggestedEstimateFromSchedule: suggestedEstimate,
+    contributions: parseContributionsSafe(billRow?.shuttle_contributions),
+    prevMonthContributions: parseContributionsSafe(prevRow?.shuttle_contributions),
   };
 }
 
@@ -1017,10 +1042,27 @@ export async function issueMonthlyBill(
     return gasPost<MonthlyBillData>('issueMonthlyBill', idToken, payload);
   }
   const current = buildMockMonthlyBill(payload.month);
-  const calc = calculateMonthlyBill({
-    estimate: payload.estimate,
-    carryIn: current.bill.carry_in,
-    memberCount: payload.memberIds.length,
+  const carryIn = payload.carryIn !== undefined ? payload.carryIn : current.bill.carry_in;
+  const appliedCredits = payload.appliedCredits ?? current.prevMonthContributions ?? [];
+  const courtFee = payload.courtFee ?? payload.estimate;
+  const shuttleTubeQty = payload.shuttleTubeQty ?? 0;
+  const shuttleTubePrice = payload.shuttleTubePrice ?? 0;
+  const shuttleTubeAmount =
+    payload.shuttleTubeAmount ?? Math.round(shuttleTubeQty * shuttleTubePrice);
+  const prevOvertimeFee = payload.prevOvertimeFee ?? 0;
+
+  const detailed = calculateDetailedMonthlyBill({
+    courtFee,
+    shuttleTubeQty,
+    shuttleTubePrice,
+    shuttleAmountOverride: payload.shuttleTubeAmount !== undefined,
+    manualShuttleAmount: shuttleTubeAmount,
+    prevOvertimeFee,
+    venueTotalOverride: true,
+    manualVenueTotal: payload.estimate,
+    carryIn,
+    memberIds: payload.memberIds,
+    appliedCredits,
     roundingUnit: mockState.settings.rounding_unit,
     actualCost: current.bill.actual_cost,
     guestIncome: current.bill.guest_income,
@@ -1033,40 +1075,91 @@ export async function issueMonthlyBill(
   );
   mockState.monthlyDues = mockState.monthlyDues.filter((d) => d.month !== payload.month);
 
-  payload.memberIds.forEach((mId, i) => {
-    const oldPaid = oldPaidMap.get(mId);
+  detailed.memberDues.forEach((line, i) => {
+    const oldPaid = oldPaidMap.get(line.memberId);
     mockState.monthlyDues.push({
       due_id: `DUE_${payload.month}_${i}_${Date.now()}`,
       month: payload.month,
-      member_id: mId,
-      member_name: mockState.members.find((m) => m.member_id === mId)?.name || mId,
-      amount: calc.perMember,
-      is_paid: oldPaid ? true : calc.perMember === 0,
-      paid_at: oldPaid ? oldPaid.paid_at : calc.perMember === 0 ? nowIso() : '',
-      confirmed_by: oldPaid ? oldPaid.confirmed_by : '',
+      member_id: line.memberId,
+      member_name: mockState.members.find((m) => m.member_id === line.memberId)?.name || line.memberId,
+      amount: line.netAmount,
+      base_amount: line.baseAmount,
+      credit_amount: line.creditAmount,
+      credit_note: line.creditNote,
+      is_paid: oldPaid ? true : line.netAmount === 0,
+      paid_at: oldPaid ? oldPaid.paid_at : line.netAmount === 0 ? nowIso() : '',
+      confirmed_by: oldPaid ? oldPaid.confirmed_by : line.netAmount === 0 ? 'tuantrungky@gmail.com' : '',
     });
   });
 
   const existingBillIdx = mockState.monthlyBills.findIndex((b) => b.month === payload.month);
   const nextBill: MonthlyBill = {
     month: payload.month,
-    estimate: calc.estimate,
-    carry_in: calc.carryIn,
-    to_collect: calc.toCollect,
-    member_count: calc.memberCount,
-    per_member: calc.perMember,
-    billed_total: calc.billedTotal,
-    actual_cost: calc.actualCost,
+    estimate: detailed.venueTotal,
+    carry_in: detailed.carryIn,
+    to_collect: detailed.toCollect,
+    member_count: detailed.memberCount,
+    per_member: detailed.perMember,
+    billed_total: detailed.billedTotal,
+    actual_cost: detailed.actualCost,
     actual_cost_override: existingBillIdx >= 0 ? mockState.monthlyBills[existingBillIdx].actual_cost_override : null,
-    guest_income: calc.guestIncome,
-    carry_out: calc.carryOut,
+    guest_income: detailed.guestIncome,
+    carry_out: detailed.carryOut,
     status: 'OPEN',
     created_by: 'tuantrungky@gmail.com',
     closed_at: '',
+    court_fee: courtFee,
+    shuttle_tube_qty: shuttleTubeQty,
+    shuttle_tube_price: shuttleTubePrice,
+    shuttle_tube_amount: shuttleTubeAmount,
+    prev_overtime_fee: prevOvertimeFee,
+    bill_detail: JSON.stringify({ ...(payload.billDetail || {}), appliedCredits }),
+    shuttle_contributions:
+      existingBillIdx >= 0 ? mockState.monthlyBills[existingBillIdx].shuttle_contributions || '[]' : '[]',
+    applied_credits_total: detailed.appliedCreditsTotal,
   };
   if (existingBillIdx >= 0) mockState.monthlyBills[existingBillIdx] = nextBill;
   else mockState.monthlyBills.push(nextBill);
 
+  return mockDelay(buildMockMonthlyBill(payload.month));
+}
+
+export async function saveMonthlyContributions(
+  idToken: string,
+  payload: SaveMonthlyContributionsPayload
+): Promise<MonthlyBillData> {
+  if (!IS_MOCK_MODE) {
+    return gasPost<MonthlyBillData>('saveMonthlyContributions', idToken, payload);
+  }
+  const normalized: ShuttleContributionItem[] = payload.contributions
+    .filter((c) => c.member_id && ((c.amount ?? c.tube_qty * c.unit_price) > 0 || c.tube_qty > 0))
+    .map((c, idx) => ({
+      id: c.id || `CNT_MOCK_${Date.now()}_${idx}`,
+      member_id: c.member_id,
+      member_name:
+        c.member_name ||
+        mockState.members.find((m) => m.member_id === c.member_id)?.name ||
+        c.member_id,
+      tube_qty: c.tube_qty,
+      unit_price: c.unit_price,
+      amount: c.amount !== undefined ? Math.round(c.amount) : Math.round(c.tube_qty * c.unit_price),
+      note: c.note || '',
+      created_at: nowIso(),
+    }));
+  const serialized = JSON.stringify(normalized);
+  const idx = mockState.monthlyBills.findIndex((b) => b.month === payload.month);
+  if (idx >= 0) {
+    mockState.monthlyBills[idx] = {
+      ...mockState.monthlyBills[idx],
+      shuttle_contributions: serialized,
+    };
+  } else {
+    const current = buildMockMonthlyBill(payload.month);
+    mockState.monthlyBills.push({
+      ...current.bill,
+      shuttle_contributions: serialized,
+    });
+  }
   return mockDelay(buildMockMonthlyBill(payload.month));
 }
 

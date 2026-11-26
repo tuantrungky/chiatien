@@ -112,19 +112,23 @@ export function Layout({
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col md:flex-row">
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex md:flex-col md:w-64 md:fixed md:inset-y-0 bg-white border-r border-slate-200 z-30">
-        <div className="p-5 border-b border-slate-100 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
-            <Trophy className="w-5 h-5" />
-          </div>
+        <div className="h-1 bg-gradient-to-r from-[#1d5fa7] via-[#f59e0b] to-[#65b741]" />
+        <div className="p-4 bg-gradient-to-br from-[#0f2f52] via-[#174676] to-[#1e5a96] text-white flex items-center gap-3">
+          <img
+            src="/logo.jpg"
+            alt="Lông Ca Club"
+            className="w-12 h-12 rounded-full bg-white p-0.5 object-cover ring-2 ring-amber-400 shadow-md shrink-0"
+          />
           <div className="min-w-0">
-            <h1 className="text-sm font-bold text-slate-900 truncate">{clubName}</h1>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                <ShieldCheck className="w-3 h-3" />
+            <h1 className="text-sm font-extrabold text-white truncate">{clubName}</h1>
+            <p className="text-[11px] font-semibold text-amber-300 truncate">Gà nhà đá nhau</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-100 bg-white/15 px-1.5 py-0.5 rounded">
+                <ShieldCheck className="w-3 h-3 text-emerald-300" />
                 {isEditor ? 'Editor Mode' : 'Viewer'}
               </span>
               {IS_MOCK_MODE && (
-                <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] font-semibold text-amber-900 bg-amber-300 px-1.5 py-0.5 rounded">
                   MOCK
                 </span>
               )}
@@ -169,12 +173,12 @@ export function Layout({
                 onClick={() => handleSelectTab(item.id)}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
                   isActive
-                    ? 'bg-emerald-50 text-emerald-700'
+                    ? 'bg-[#eef5fc] text-[#113b66] font-bold'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
                 <span className="flex items-center gap-3">
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-[#1d5fa7]' : 'text-slate-400'}`} />
                   {item.label}
                 </span>
                 {item.id === 'debts' && outstandingCount > 0 && (
@@ -205,16 +209,19 @@ export function Layout({
       {/* Main Content Area */}
       <div className="flex-1 md:pl-64 flex flex-col min-w-0">
         <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
+          <div className="md:hidden h-1 bg-gradient-to-r from-[#1d5fa7] via-[#f59e0b] to-[#65b741]" />
           <div className="max-w-5xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 md:hidden">
-              <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                <Trophy className="w-4 h-4" />
-              </div>
+              <img
+                src="/logo.jpg"
+                alt="Lông Ca Club"
+                className="w-9 h-9 rounded-full bg-white p-0.5 object-cover ring-2 ring-sky-200 shadow-xs shrink-0"
+              />
               <div className="min-w-0">
-                <h1 className="text-xs sm:text-sm font-bold text-slate-900 truncate">{clubName}</h1>
+                <h1 className="text-xs sm:text-sm font-extrabold text-[#113b66] truncate">{clubName}</h1>
                 <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-slate-500 truncate">
-                    {isEditor ? 'Quản lý Editor' : 'Xem công khai'}
+                  <span className="text-[10px] font-medium text-slate-500 truncate">
+                    {isEditor ? 'Quản lý Editor' : 'Gà nhà đá nhau'}
                   </span>
                   {IS_MOCK_MODE && (
                     <span className="text-[9px] font-semibold text-amber-700 bg-amber-100 px-1 rounded">
@@ -338,11 +345,11 @@ export function Layout({
                 type="button"
                 onClick={() => handleSelectTab(item.id)}
                 className={`relative flex flex-col items-center justify-center gap-1 px-1 transition-colors cursor-pointer ${
-                  isActive ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-800'
+                  isActive ? 'text-[#113b66]' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 {isActive && (
-                  <span className="absolute top-0 inset-x-3 h-0.5 rounded-b bg-emerald-600" />
+                  <span className="absolute top-0 inset-x-3 h-0.5 rounded-b bg-gradient-to-r from-[#1d5fa7] to-[#65b741]" />
                 )}
                 <div className="relative">
                   <Icon className="w-5 h-5" />

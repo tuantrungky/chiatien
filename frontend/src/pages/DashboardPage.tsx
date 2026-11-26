@@ -279,15 +279,15 @@ export function DashboardPage({
 
       {/* 4 Thẻ chỉ số nhanh (KPI) */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-2xl p-3.5 shadow-sm">
-          <div className="flex items-center justify-between text-emerald-100 text-xs font-medium mb-1.5">
+        <div className="bg-gradient-to-br from-[#113b66] via-[#1b568f] to-[#0d7c66] text-white rounded-2xl p-3.5 shadow-sm">
+          <div className="flex items-center justify-between text-sky-100 text-xs font-medium mb-1.5">
             <span>Chi Cầu lông (kỳ)</span>
-            <Trophy className="w-4 h-4 shrink-0" />
+            <Trophy className="w-4 h-4 text-amber-300 shrink-0" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold tracking-tight">
             {formatVND(badmintonCostInPeriod)}
           </p>
-          <p className="text-[11px] text-emerald-100/90 mt-1">
+          <p className="text-[11px] text-sky-100/90 mt-1">
             {fixedCountInPeriod} cố định • {adhocCountInPeriod} phát sinh
           </p>
         </div>
@@ -586,11 +586,16 @@ export function DashboardPage({
             {debts?.badminton.monthlyDues.map((d) => (
               <div key={d.due_id} className="p-3.5 flex items-center justify-between gap-2.5">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-sm text-slate-900">{d.member_name}</span>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
                       Cầu T{d.month.slice(5, 7)}
                     </span>
+                    {(d.credit_amount ?? 0) > 0 && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                        −góp cầu
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm font-extrabold text-rose-600 mt-0.5">
                     {formatVND(d.amount)} → {treasurer?.name || 'Thủ quỹ'}

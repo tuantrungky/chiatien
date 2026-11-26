@@ -234,6 +234,10 @@ function doPost(e) {
           result = issueMonthlyBillRecord(payload, auth.email);
           break;
 
+        case 'saveMonthlyContributions':
+          result = saveMonthlyContributionsRecord(payload, auth.email);
+          break;
+
         case 'markDuePaid':
           result = markDuePaidRecord(payload, auth.email);
           break;

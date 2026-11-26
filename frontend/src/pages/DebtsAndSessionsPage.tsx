@@ -336,11 +336,16 @@ export function DebtsAndSessionsPage({
                     className="p-3.5 flex items-center justify-between gap-2 flex-wrap"
                   >
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-sm font-bold text-slate-900">{d.member_name}</span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
                           Cầu T{d.month.slice(5, 7)}
                         </span>
+                        {(d.credit_amount ?? 0) > 0 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                            Đã trừ {formatVND(d.credit_amount ?? 0)} góp cầu
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs font-extrabold text-rose-600 mt-0.5">
                         {formatVND(d.amount)} → {treasurer?.name || 'Thủ quỹ'}

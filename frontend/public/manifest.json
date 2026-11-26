@@ -1,13 +1,13 @@
 {
-  "name": "CLB Cầu Lông & Nhậu — Quỹ & Chia Tiền",
-  "short_name": "Cầu Lông & Nhậu",
-  "description": "Quản lý quỹ cầu lông, điểm danh vãng lai và chia tiền ăn nhậu kèm VietQR",
+  "name": "Lông Ca Club — Quản Lý Cầu Lông & Ăn Nhậu",
+  "short_name": "Lông Ca Club",
+  "description": "Gà Nhà Đá Nhau — Quản lý lịch cầu lông, hóa đơn tháng, góp cầu và chia tiền ăn nhậu kèm VietQR",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f8fafc",
-  "theme_color": "#059669",
+  "theme_color": "#113b66",
   "icons": [
     {
       "src": "/icon-192.png",
