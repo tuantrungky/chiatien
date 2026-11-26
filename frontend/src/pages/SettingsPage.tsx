@@ -28,7 +28,7 @@ import { VIETQR_BANKS } from '../utils/banks';
 interface SettingsPageProps {
   members: Member[];
   settings: SettingsMap;
-  onRefreshAll: () => Promise<void>;
+  onRefreshAll: () => Promise<boolean>;
 }
 
 export function SettingsPage({ members, settings, onRefreshAll }: SettingsPageProps) {
@@ -55,8 +55,11 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
 
   // Settings form state
   const [clubName, setClubName] = useState(settings.club_name);
-  const [monthlyFee, setMonthlyFee] = useState(String(settings.monthly_fee));
   const [guestFee, setGuestFee] = useState(String(settings.guest_fee));
+  const [courtPrice, setCourtPrice] = useState(String(settings.court_price_per_hour || 0));
+  const [shuttlePrice, setShuttlePrice] = useState(String(settings.shuttle_price || 0));
+  const [defaultCourts, setDefaultCourts] = useState(String(settings.default_court_count || 2));
+  const [defaultHours, setDefaultHours] = useState(String(settings.default_play_hours || 1.5));
   const [roundingUnit, setRoundingUnit] = useState(String(settings.rounding_unit));
   const [transferPrefix, setTransferPrefix] = useState(settings.transfer_prefix);
   const [driveFolderId, setDriveFolderId] = useState(settings.drive_folder_id);
@@ -70,8 +73,11 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
 
   useEffect(() => {
     setClubName(settings.club_name);
-    setMonthlyFee(String(settings.monthly_fee));
     setGuestFee(String(settings.guest_fee));
+    setCourtPrice(String(settings.court_price_per_hour || 0));
+    setShuttlePrice(String(settings.shuttle_price || 0));
+    setDefaultCourts(String(settings.default_court_count || 2));
+    setDefaultHours(String(settings.default_play_hours || 1.5));
     setRoundingUnit(String(settings.rounding_unit));
     setTransferPrefix(settings.transfer_prefix);
     setDriveFolderId(settings.drive_folder_id);
@@ -213,6 +219,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
         isActive: !m.is_active,
       });
       await onRefreshAll();
+      toast.success(m.is_active ? `Đã ẩn ${m.name}.` : `Đã kích hoạt lại ${m.name}.`);
     } catch (err) {
       setErrorMsg(handleApiError(err));
     } finally {
@@ -230,8 +237,11 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
       await updateSettings(idToken, {
         settings: {
           club_name: clubName.trim(),
-          monthly_fee: Number(monthlyFee) || 300000,
           guest_fee: Number(guestFee) || 50000,
+          court_price_per_hour: Number(courtPrice) || 0,
+          shuttle_price: Number(shuttlePrice) || 0,
+          default_court_count: Number(defaultCourts) || 2,
+          default_play_hours: Number(defaultHours) || 1.5,
           rounding_unit: Number(roundingUnit) || 1000,
           transfer_prefix: transferPrefix.trim() || 'CLN',
           drive_folder_id: driveFolderId.trim(),
@@ -283,6 +293,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
         email: targetEmail,
       });
       setEditorsList(updated);
+      toast.success(`Đã xóa Editor ${targetEmail}.`);
     } catch (err) {
       setErrorMsg(handleApiError(err));
     } finally {
@@ -292,11 +303,10 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
 
   return (
     <div className="space-y-4">
-      {/* Sub-tabs */}
       <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-1 rounded-2xl">
         {[
           { id: 'MEMBERS' as const, label: 'Thành viên', icon: Users },
-          { id: 'SETTINGS' as const, label: 'Cấu hình', icon: SettingsIcon },
+          { id: 'SETTINGS' as const, label: 'Đơn giá & Cài đặt', icon: SettingsIcon },
           { id: 'EDITORS' as const, label: 'Quyền Editor', icon: Shield },
         ].map((t) => {
           const Icon = t.icon;
@@ -314,8 +324,8 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                 active ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Icon className="w-4 h-4" />
-              <span>{t.label}</span>
+              <Icon className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t.label}</span>
             </button>
           );
         })}
@@ -335,7 +345,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
         </div>
       )}
 
-      {/* TAB 1: QUẢN LÝ THÀNH VIÊN */}
+      {/* TAB 1: THÀNH VIÊN */}
       {subTab === 'MEMBERS' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -369,7 +379,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                     required
                     value={mName}
                     onChange={(e) => setMName(e.target.value)}
-                    placeholder="VD: Nguyễn Anh Tuấn"
+                    placeholder="VD: Thảo"
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   />
                 </div>
@@ -389,13 +399,13 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Biệt danh (aliases cho AI giọng nói)
+                    Biệt danh (tìm nhanh)
                   </label>
                   <input
                     type="text"
                     value={mAliases}
                     onChange={(e) => setMAliases(e.target.value)}
-                    placeholder="VD: Tuấn béo, anh Tuấn"
+                    placeholder="VD: Thảo, Thỏ"
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   />
                 </div>
@@ -443,7 +453,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                     type="text"
                     value={mAccountName}
                     onChange={(e) => setMAccountName(e.target.value.toUpperCase())}
-                    placeholder="NGUYEN ANH TUAN"
+                    placeholder="LAI THANH THAO"
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm uppercase"
                   />
                 </div>
@@ -519,9 +529,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                         </span>
                       )}
                     </div>
-                    {m.aliases && (
-                      <p className="text-[11px] text-slate-500 mt-0.5">Biệt danh: {m.aliases}</p>
-                    )}
+                    {m.phone && <p className="text-[11px] text-slate-500 mt-0.5">SĐT: {m.phone}</p>}
                     {m.bank_name && m.account_no && (
                       <p className="text-[11px] text-slate-500">
                         {m.bank_name} • {m.account_no}
@@ -535,7 +543,6 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                         type="button"
                         onClick={() => void handleUpgradeGuestToMain(m)}
                         disabled={busy}
-                        title="Nâng cấp lên Thành viên chính"
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold cursor-pointer"
                       >
                         <ArrowUpCircle className="w-3.5 h-3.5" />
@@ -567,13 +574,13 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
         </div>
       )}
 
-      {/* TAB 2: CẤU HÌNH SETTINGS */}
+      {/* TAB 2: ĐƠN GIÁ & CÀI ĐẶT */}
       {subTab === 'SETTINGS' && (
         <form
           onSubmit={handleSaveSettings}
           className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3.5 shadow-xs"
         >
-          <h3 className="text-sm font-bold text-slate-900">Cấu hình chung</h3>
+          <h3 className="text-sm font-bold text-slate-900">Đơn giá Cầu lông &amp; Cấu hình CLB</h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -598,20 +605,61 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">
-                Quỹ tháng mặc định (VND)
+                Giá sân / giờ (đ)
               </label>
               <input
                 type="number"
                 min={0}
-                step={10000}
-                value={monthlyFee}
-                onChange={(e) => setMonthlyFee(e.target.value)}
+                step={5000}
+                value={courtPrice}
+                onChange={(e) => setCourtPrice(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
               />
             </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Giá 1 quả cầu (đ)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={1000}
+                value={shuttlePrice}
+                onChange={(e) => setShuttlePrice(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Số sân mặc định
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={defaultCourts}
+                onChange={(e) => setDefaultCourts(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Số giờ mặc định
+              </label>
+              <input
+                type="number"
+                min={0.5}
+                step={0.5}
+                value={defaultHours}
+                onChange={(e) => setDefaultHours(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">
                 Phí vãng lai mặc định (VND)
@@ -627,7 +675,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">
-                Làm tròn tiền nhậu (VND)
+                Làm tròn chia tiền (VND)
               </label>
               <input
                 type="number"
@@ -642,7 +690,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
 
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">
-              ROOT_DRIVE_FOLDER_ID (Fallback lưu ảnh hóa đơn)
+              ROOT_DRIVE_FOLDER_ID (Lưu ảnh hóa đơn)
             </label>
             <input
               type="text"
@@ -664,7 +712,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
         </form>
       )}
 
-      {/* TAB 3: QUẢN LÝ EDITORS */}
+      {/* TAB 3: QUYỀN EDITORS */}
       {subTab === 'EDITORS' && (
         <div className="space-y-3">
           {isAdmin && (

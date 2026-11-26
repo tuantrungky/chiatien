@@ -1,12 +1,12 @@
-# CLB Cầu Lông & Nhậu — Web App Quản Lý Quỹ & Chia Tiền
+# CLB Cầu Lông & Nhậu — Web App Quản Lý Lịch & Chia Tiền
 
-Ứng dụng Web **Mobile-first** quản lý Quỹ Cầu Lông (`BADMINTON`) và Chia tiền Ăn nhậu (`DRINKING`), tích hợp **VietQR**, thuật toán **Debt Simplification** (cấn trừ nợ vòng tròn), **Google Drive** lưu hóa đơn và **Gemini AI** (đọc hóa đơn & điểm danh bằng giọng nói tiếng Việt).
+Ứng dụng Web **Mobile-first** quản lý **Lịch Cầu Lông**, **Hóa đơn Cầu lông theo tháng** (tự động cấn trừ dư/thiếu và tiền vãng lai sang tháng sau) và **Chia tiền Ăn nhậu** (hỗ trợ cả ra quán & góp món tại nhà), tích hợp **VietQR**, thuật toán **Debt Simplification** tách biệt hoàn toàn Cầu lông / Ăn nhậu, **Google Drive** lưu hóa đơn và **Gemini AI** đọc ảnh hóa đơn.
 
 - **Frontend (`/frontend`):** React + Vite + TypeScript + Tailwind CSS + Recharts + PWA (deploy **Vercel**).
-- **Backend (`/gas-backend`):** Google Apps Script (`Code.gs`, `AuthService.gs`, `SheetService.gs`, `DriveService.gs`, `GeminiService.gs`) làm REST API và proxy bảo mật `GEMINI_API_KEY`.
-- **Database:** 1 file Google Sheets gồm 7 tabs (`Members`, `Sessions`, `Attendance`, `Fund_Ledger`, `Settlements`, `Settings`, `Editors`).
+- **Backend (`/gas-backend`):** Google Apps Script (`Code.gs`, `AuthService.gs`, `SheetService.gs`, `DriveService.gs`, `GeminiService.gs`) dùng `CacheService` (tăng tốc `getAll`) và làm proxy bảo mật `GEMINI_API_KEY`.
+- **Database:** 1 file Google Sheets gồm **11 tabs** (`Members`, `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Fund_Ledger`, `Settings`, `Editors`).
 
-> Chi tiết nghiệp vụ, schema 7 tabs và API Contract xem tại [SPEC.md](./SPEC.md).
+> Chi tiết nghiệp vụ, schema 11 tabs và API Contract xem tại [SPEC.md](./SPEC.md).
 
 ---
 
@@ -34,14 +34,10 @@
    - `GEMINI_MODEL`: `gemini-2.5-flash`
    - `ROOT_DRIVE_FOLDER_ID`: Folder ID ở Bước 1.
    - `GOOGLE_CLIENT_ID`: *(Sẽ điền ngay sau khi hoàn tất Bước 3 bên dưới)*.
-4. Mở file `SheetService.gs`, chọn hàm **`setupDatabase`** trên thanh công cụ và bấm **Run** (cấp quyền truy cập Sheet & Drive cho script). Script sẽ tự tạo đủ **7 tabs**, đóng băng header và điền cấu hình mặc định vào `Settings`.
+4. Mở file `SheetService.gs`, chọn hàm **`setupDatabase`** trên thanh công cụ và bấm **Run** (cấp quyền truy cập Sheet & Drive cho script). Script sẽ tự tạo / nâng cấp đủ **11 tabs**, đóng băng header, đặt định dạng plain text `@` cho cột mã/ngày/SĐT/STK và điền cấu hình mặc định vào `Settings`.
 5. Quay lại Google Sheet:
-   - Vào tab **`Editors`**, thêm dòng đầu tiên cho chính bạn:
-     - `email`: email Google viết thường toàn bộ
-     - `name`: Tên của bạn
-     - `role`: **`ADMIN`**
-     - `is_active`: **`TRUE`**
-   - Vào tab **`Members`**, thêm ít nhất 1 dòng Thủ quỹ (`member_id = MEM_001`, `type = MAIN`, kèm `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active = TRUE`).
+   - Vào tab **`Editors`**, thêm dòng đầu tiên cho chính bạn (`email` viết thường, `name`, `role = ADMIN`, `is_active = TRUE`).
+   - Vào tab **`Members`**, thêm ít nhất 1 dòng Thủ quỹ (`member_id = MEM_001`, `type = MAIN`, kèm `bank_bin`, `bank_name`, `account_no` nhớ giữ số `0` đầu, `account_name`, `is_active = TRUE`).
    - Vào tab **`Settings`**, điền `value` cho dòng `treasurer_member_id` là `MEM_001`.
 6. Bấm **Deploy** -> **New deployment** -> chọn loại **Web app**:
    - **Execute as:** `Me`
@@ -86,18 +82,18 @@
 ---
 
 ### Bước 5 — Checklist Nghiệm Thu (Smoke Test)
-Sau khi deploy xong, kiểm tra nhanh 6 bài test thực tế sau:
+Sau khi deploy xong, kiểm tra nhanh các bài test thực tế sau:
 
-- [ ] **1. Luồng Viewer ẩn danh & VietQR:** Mở link Vercel bằng **Tab ẩn danh** trên điện thoại -> thấy ngay số dư quỹ, lịch sử buổi chơi, bảng công nợ tối ưu và bấm mở được ảnh **VietQR** đúng số tiền/STK/nội dung không dấu; không thấy các nút Tạo/Sửa/Xóa/Gạch nợ.
-- [ ] **2. Đăng nhập Editor Google:** Bấm **"Đăng nhập Editor"** ở góc phải header -> chọn tài khoản Google có trong tab `Editors` -> xuất hiện đủ 5 tab (`Tổng quan`, `Công nợ`, `Tạo buổi`, `Quỹ`, `Cài đặt`). Thử đăng nhập bằng 1 Gmail không có trong `Editors` -> bị từ chối quyền (`403`).
-- [ ] **3. Quét ảnh hóa đơn AI (`parseBillAI`):** Vào **Tạo buổi** -> chụp/chọn 1 ảnh hóa đơn -> kiểm tra thấy ảnh được lưu vào subfolder `YYYY-MM` trên Google Drive (`ROOT_DRIVE_FOLDER_ID`) và tự điền đúng `Tổng tiền` + `Tóm tắt món`.
-- [ ] **4. Điểm danh bằng Micro & Tạo vãng lai mới (`parseVoiceAttendanceAI`):** Bấm nút **Nói điểm danh** đọc tiếng Việt (VD: *"Hôm nay có Tuấn, Hùng, thêm vãng lai Nam"*) -> bấm **AI phân tích điểm danh** -> kiểm tra tự tick thành viên cũ và hiện **Nam** trong mục vãng lai mới -> bấm **Lưu buổi** và kiểm tra `Nam` tự xuất hiện trong tab `Members`.
-- [ ] **5. Thống kê Vãng lai theo tháng:** Vào tab **Quỹ** -> **Thống kê Vãng lai** -> kiểm tra `Nam` hiển thị đúng số buổi, badge ngày đã đi và trạng thái nợ phí buổi vừa tạo.
-- [ ] **6. Xác nhận thanh toán & Cộng quỹ tự động:** Vào tab **Công nợ** -> bấm **"Xác nhận đã chuyển"** trên lệnh tối ưu (hoặc **"Đã thu"** trên dòng vãng lai) -> kiểm tra công nợ giảm về `0`, tab `Settlements` có dòng đối soát mới và phí vãng lai Cầu lông được tự động cộng vào `Fund_Ledger` (`GUEST_FEE`).
+- [ ] **1. Luồng Viewer ẩn danh & VietQR:** Mở link Vercel bằng **Tab ẩn danh** -> thấy ngay Tổng quan, Lịch tháng, Công nợ tách riêng Cầu lông / Ăn nhậu, Tháng cầu và mở được ảnh **VietQR** đúng số tiền/STK/nội dung không dấu; không thấy các nút Tạo/Sửa/Xóa/Gạch nợ.
+- [ ] **2. Đăng nhập Editor & `localStorage`:** Bấm **"Đăng nhập Editor"** -> chọn tài khoản Google trong tab `Editors` -> giữ phiên đăng nhập trong `localStorage` khi mở lại trình duyệt. Thử Gmail ngoài `Editors` -> bị từ chối (`403`).
+- [ ] **3. Lịch tháng & Tạo buổi Cầu lông chi tiết:** Tạo lịch tháng trên tab **Lịch** -> bấm **"Điểm danh & Ghi buổi"** -> kiểm tra công thức `Tiền sân (+ Sân thêm giờ) + Tiền cầu + Chi phí khác`, tick tay & thêm nhanh vãng lai, sau khi lưu **KHÔNG** phát sinh chuyển khoản chéo giữa các thành viên `MAIN`.
+- [ ] **4. Hóa đơn Cầu lông tháng & Chuyển dư:** Vào tab **Tháng cầu** -> Phát hành hóa đơn tháng -> đánh dấu thành viên đã đóng -> thử Chốt tháng và kiểm tra `carry_out = carry_in + billed_total + guest_income - actual_cost`.
+- [ ] **5. Buổi Ăn nhậu góp món & Tách nợ:** Tạo buổi Ăn nhậu kiểu `HOME` hoặc `RESTAURANT` có thành viên góp món (`Session_Items`) -> kiểm tra nợ tối ưu **chỉ nằm ở nhóm Ăn nhậu** và cấn trừ đúng `per_person - contributed_amount`.
 
 ---
 
 ## Chạy Dev Local với Mock Data
+
 ```bash
 cd frontend
 npm install

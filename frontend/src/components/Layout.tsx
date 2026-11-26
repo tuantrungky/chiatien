@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import {
   ArrowRightLeft,
+  CalendarDays,
   LayoutDashboard,
-  PlusCircle,
   RefreshCw,
   Settings,
   ShieldCheck,
@@ -14,7 +14,7 @@ import { IS_MOCK_MODE } from '../services/api';
 import type { Member } from '../types';
 import { EditorLoginButton } from './EditorLoginButton';
 
-export type ActiveTab = 'dashboard' | 'debts' | 'create' | 'fund' | 'settings';
+export type ActiveTab = 'dashboard' | 'calendar' | 'debts' | 'monthly' | 'create' | 'settings';
 
 interface LayoutProps {
   activeTab: ActiveTab;
@@ -28,14 +28,6 @@ interface LayoutProps {
   children: ReactNode;
 }
 
-function formatSyncTime(ts: number | null): string {
-  if (!ts) return 'Chưa đồng bộ';
-  const d = new Date(ts);
-  const hh = d.getHours() < 10 ? `0${d.getHours()}` : String(d.getHours());
-  const mm = d.getMinutes() < 10 ? `0${d.getMinutes()}` : String(d.getMinutes());
-  return `Cập nhật lúc ${hh}:${mm}`;
-}
-
 interface NavItem {
   id: ActiveTab;
   label: string;
@@ -47,9 +39,15 @@ interface NavItem {
 const ALL_NAV_ITEMS: NavItem[] = [
   {
     id: 'dashboard',
-    label: 'Tổng quan & Báo cáo',
+    label: 'Tổng quan',
     mobileLabel: 'Tổng quan',
     icon: LayoutDashboard,
+  },
+  {
+    id: 'calendar',
+    label: 'Lịch tháng',
+    mobileLabel: 'Lịch',
+    icon: CalendarDays,
   },
   {
     id: 'debts',
@@ -58,16 +56,9 @@ const ALL_NAV_ITEMS: NavItem[] = [
     icon: ArrowRightLeft,
   },
   {
-    id: 'create',
-    label: 'Tạo buổi mới',
-    mobileLabel: 'Tạo buổi',
-    icon: PlusCircle,
-    editorOnly: true,
-  },
-  {
-    id: 'fund',
-    label: 'Quỹ & Vãng lai',
-    mobileLabel: 'Quỹ',
+    id: 'monthly',
+    label: 'Tháng cầu & Vãng lai',
+    mobileLabel: 'Tháng cầu',
     icon: Wallet,
   },
   {
@@ -78,6 +69,14 @@ const ALL_NAV_ITEMS: NavItem[] = [
     editorOnly: true,
   },
 ];
+
+function formatSyncTime(ts: number | null): string {
+  if (!ts) return 'Chưa đồng bộ';
+  const d = new Date(ts);
+  const hh = d.getHours() < 10 ? `0${d.getHours()}` : String(d.getHours());
+  const mm = d.getMinutes() < 10 ? `0${d.getMinutes()}` : String(d.getMinutes());
+  return `Cập nhật lúc ${hh}:${mm}`;
+}
 
 export function Layout({
   activeTab,
@@ -163,7 +162,6 @@ export function Layout({
 
       {/* Main Content Area */}
       <div className="flex-1 md:pl-64 flex flex-col min-w-0">
-        {/* Top Bar */}
         <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
           <div className="max-w-5xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 md:hidden">
@@ -187,7 +185,9 @@ export function Layout({
 
             <div className="hidden md:flex items-center gap-3">
               <h2 className="text-base font-bold text-slate-900">
-                {navItems.find((n) => n.id === activeTab)?.label}
+                {activeTab === 'create'
+                  ? 'Ghi buổi chơi'
+                  : navItems.find((n) => n.id === activeTab)?.label}
               </h2>
               <span className="text-xs text-slate-400">
                 {refreshing ? 'Đang đồng bộ Sheet...' : formatSyncTime(lastUpdatedAt)}
@@ -195,9 +195,6 @@ export function Layout({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="md:hidden text-[10px] text-slate-400 hidden xs:inline">
-                {refreshing ? 'Đang tải...' : formatSyncTime(lastUpdatedAt)}
-              </span>
               <button
                 type="button"
                 onClick={onRefresh}
@@ -212,14 +209,12 @@ export function Layout({
               <EditorLoginButton />
             </div>
           </div>
-          {/* Mobile sync status strip */}
           <div className="md:hidden px-3 py-1 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500">
             <span>{refreshing ? 'Đang đồng bộ dữ liệu mới nhất...' : formatSyncTime(lastUpdatedAt)}</span>
             {IS_MOCK_MODE && <span className="font-semibold text-amber-700">Chế độ Demo (Mock)</span>}
           </div>
         </header>
 
-        {/* Page Body */}
         <main className="flex-1 max-w-5xl w-full mx-auto px-3.5 sm:px-6 pt-4 pb-24 md:pb-10">
           {children}
         </main>
@@ -232,7 +227,7 @@ export function Layout({
       >
         <div
           className={`grid h-16 max-w-lg mx-auto ${
-            navItems.length === 5 ? 'grid-cols-5' : 'grid-cols-3'
+            navItems.length === 5 ? 'grid-cols-5' : 'grid-cols-4'
           }`}
         >
           {navItems.map((item) => {
@@ -251,18 +246,18 @@ export function Layout({
                   <span className="absolute top-0 inset-x-3 h-0.5 rounded-b bg-emerald-600" />
                 )}
                 <div className="relative">
-                  <Icon
-                    className={`${
-                      item.id === 'create' ? 'w-6 h-6 text-emerald-600' : 'w-5 h-5'
-                    }`}
-                  />
+                  <Icon className="w-5 h-5" />
                   {item.id === 'debts' && outstandingCount > 0 && (
                     <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center">
                       {outstandingCount}
                     </span>
                   )}
                 </div>
-                <span className={`text-[10px] leading-none truncate max-w-full ${isActive ? 'font-bold' : 'font-medium'}`}>
+                <span
+                  className={`text-[10px] leading-none truncate max-w-full ${
+                    isActive ? 'font-bold' : 'font-medium'
+                  }`}
+                >
                   {item.mobileLabel}
                 </span>
               </button>

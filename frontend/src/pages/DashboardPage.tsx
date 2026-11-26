@@ -1,14 +1,13 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   BarChart3,
   PieChart as PieChartIcon,
   QrCode,
-  TrendingDown,
-  TrendingUp,
+  Sparkles,
+  Trophy,
   Utensils,
-  Wallet,
-  AlertCircle,
 } from 'lucide-react';
 import {
   Bar,
@@ -26,9 +25,10 @@ import {
 import { PeriodFilterBar } from '../components/PeriodFilterBar';
 import type { VietQRModalData } from '../components/VietQRModal';
 import type {
+  BootstrapData,
   DashboardData,
-  FundLedgerData,
   PeriodType,
+  SeparatedDebtsData,
   Session,
   SimplifiedDebtResult,
 } from '../types';
@@ -40,10 +40,11 @@ interface DashboardPageProps {
   refDate: string;
   onChangePeriodType: (type: PeriodType) => void;
   onChangeRefDate: (date: string) => void;
+  bootstrap: BootstrapData | null;
   dashboard: DashboardData | null;
   sessions: Session[];
-  fundLedger: FundLedgerData | null;
-  simplifiedDebts: SimplifiedDebtResult;
+  debts: SeparatedDebtsData | null;
+  simplifiedDrinkingDebts: SimplifiedDebtResult;
   onOpenQr: (data: VietQRModalData) => void;
   onGoToDebts: () => void;
 }
@@ -53,22 +54,38 @@ export function DashboardPage({
   refDate,
   onChangePeriodType,
   onChangeRefDate,
+  bootstrap,
   dashboard,
   sessions,
-  fundLedger,
-  simplifiedDebts,
+  debts,
+  simplifiedDrinkingDebts,
   onOpenQr,
   onGoToDebts,
 }: DashboardPageProps) {
   const [chartMode, setChartMode] = useState<'BAR' | 'PIE'>('BAR');
+
+  const treasurer = useMemo(
+    () =>
+      bootstrap?.members.find(
+        (m) => m.member_id === bootstrap.settings.treasurer_member_id
+      ),
+    [bootstrap]
+  );
 
   const periodSessions = useMemo(
     () => filterByPeriod(sessions, (s) => s.date, periodType, refDate),
     [sessions, periodType, refDate]
   );
 
-  // Tổng chi Ăn nhậu trong kỳ (từ Sessions DRINKING)
-  const drinkingExpenseInPeriod = useMemo(
+  const badmintonCostInPeriod = useMemo(
+    () =>
+      periodSessions
+        .filter((s) => s.type === 'BADMINTON')
+        .reduce((sum, s) => sum + s.total_amount, 0),
+    [periodSessions]
+  );
+
+  const drinkingCostInPeriod = useMemo(
     () =>
       periodSessions
         .filter((s) => s.type === 'DRINKING')
@@ -76,52 +93,41 @@ export function DashboardPage({
     [periodSessions]
   );
 
-  // Tổng thu / chi Cầu lông trong kỳ (từ Fund_Ledger trong kỳ)
-  const badmintonIncomeInPeriod = dashboard?.fund.periodIncome ?? fundLedger?.summary.totalIncome ?? 0;
-  const badmintonExpenseInPeriod = dashboard?.fund.periodExpense ?? fundLedger?.summary.totalExpense ?? 0;
-  const currentFundBalance = dashboard?.fund.currentBalance ?? 0;
-  const totalOutstanding = simplifiedDebts.totalOutstanding;
+  const badmintonUnpaid = debts?.badminton.totalOutstanding ?? 0;
+  const drinkingUnpaid = simplifiedDrinkingDebts.totalOutstanding;
+  const projectedCarryOut = dashboard?.badminton.projectedCarryOut ?? 0;
 
-  // Dữ liệu biểu đồ cột theo ngày/tháng
   const barChartData = useMemo(() => {
     const groupByMonth = periodType === 'QUARTER' || periodType === 'YEAR';
-    const buckets = new Map<string, { label: string; sortKey: string; badminton: number; drinking: number }>();
-
-    const ensureBucket = (sortKey: string, label: string) => {
-      if (!buckets.has(sortKey)) {
-        buckets.set(sortKey, { label, sortKey, badminton: 0, drinking: 0 });
-      }
-      return buckets.get(sortKey)!;
-    };
-
-    for (const entry of fundLedger?.entries || []) {
-      if (entry.type !== 'EXPENSE') continue;
-      const sortKey = groupByMonth ? entry.date.slice(0, 7) : entry.date;
-      const label = groupByMonth
-        ? `T${entry.date.slice(5, 7)}/${entry.date.slice(2, 4)}`
-        : formatShortDateVN(entry.date);
-      ensureBucket(sortKey, label).badminton += entry.amount;
-    }
+    const buckets = new Map<
+      string,
+      { label: string; sortKey: string; badminton: number; drinking: number }
+    >();
 
     for (const s of periodSessions) {
-      if (s.type !== 'DRINKING') continue;
       const sortKey = groupByMonth ? s.date.slice(0, 7) : s.date;
       const label = groupByMonth
         ? `T${s.date.slice(5, 7)}/${s.date.slice(2, 4)}`
         : formatShortDateVN(s.date);
-      ensureBucket(sortKey, label).drinking += s.total_amount;
+      if (!buckets.has(sortKey)) {
+        buckets.set(sortKey, { label, sortKey, badminton: 0, drinking: 0 });
+      }
+      const b = buckets.get(sortKey)!;
+      if (s.type === 'BADMINTON') b.badminton += s.total_amount;
+      else b.drinking += s.total_amount;
     }
 
     return Array.from(buckets.values()).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-  }, [fundLedger, periodSessions, periodType]);
+  }, [periodSessions, periodType]);
 
-  const pieChartData = useMemo(() => {
-    const items = [
-      { name: 'Chi Cầu lông', value: badmintonExpenseInPeriod, color: '#059669' },
-      { name: 'Chi Ăn nhậu', value: drinkingExpenseInPeriod, color: '#f97316' },
-    ];
-    return items.filter((item) => item.value > 0);
-  }, [badmintonExpenseInPeriod, drinkingExpenseInPeriod]);
+  const pieChartData = useMemo(
+    () =>
+      [
+        { name: 'Chi Cầu lông', value: badmintonCostInPeriod, color: '#059669' },
+        { name: 'Chi Ăn nhậu', value: drinkingCostInPeriod, color: '#f97316' },
+      ].filter((item) => item.value > 0),
+    [badmintonCostInPeriod, drinkingCostInPeriod]
+  );
 
   const formatCompactAxis = (v: number) => {
     if (v >= 1000000) return `${(v / 1000000).toFixed(1)}tr`;
@@ -131,7 +137,6 @@ export function DashboardPage({
 
   return (
     <div className="space-y-4">
-      {/* Bộ lọc thời gian */}
       <PeriodFilterBar
         periodType={periodType}
         refDate={refDate}
@@ -139,34 +144,19 @@ export function DashboardPage({
         onChangeRefDate={onChangeRefDate}
       />
 
-      {/* 4 Thẻ chỉ số nhanh (2x2 mobile, 4 cột desktop) */}
+      {/* 4 Thẻ chỉ số nhanh (không còn Số dư Quỹ) */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-2xl p-3.5 shadow-sm">
           <div className="flex items-center justify-between text-emerald-100 text-xs font-medium mb-1.5">
-            <span>Số dư Quỹ CLB</span>
-            <Wallet className="w-4 h-4" />
+            <span>Chi Cầu lông (kỳ)</span>
+            <Trophy className="w-4 h-4" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold tracking-tight">
-            {formatVND(currentFundBalance)}
+            {formatVND(badmintonCostInPeriod)}
           </p>
           <p className="text-[11px] text-emerald-100/90 mt-1">
-            {dashboard?.fund.pendingReimbursement
-              ? `Chờ hoàn ứng: ${formatVND(dashboard.fund.pendingReimbursement)}`
-              : 'Quỹ Cầu lông hiện tại'}
-          </p>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
-            <span>Thu / Chi Cầu lông</span>
-            <TrendingUp className="w-4 h-4 text-emerald-600" />
-          </div>
-          <p className="text-sm sm:text-base font-bold text-emerald-700">
-            +{formatVND(badmintonIncomeInPeriod)}
-          </p>
-          <p className="text-xs font-semibold text-rose-600 flex items-center gap-1 mt-0.5">
-            <TrendingDown className="w-3.5 h-3.5" />
-            -{formatVND(badmintonExpenseInPeriod)}
+            {periodSessions.filter((s) => s.type === 'BADMINTON').length} buổi • VL thu:{' '}
+            {formatVND(dashboard?.badminton.guestIncomeInMonth ?? 0)}
           </p>
         </div>
 
@@ -176,7 +166,7 @@ export function DashboardPage({
             <Utensils className="w-4 h-4 text-orange-500" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold text-slate-900">
-            {formatVND(drinkingExpenseInPeriod)}
+            {formatVND(drinkingCostInPeriod)}
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
             {periodSessions.filter((s) => s.type === 'DRINKING').length} buổi ăn nhậu
@@ -185,41 +175,159 @@ export function DashboardPage({
 
         <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
-            <span>Công nợ chưa thu</span>
+            <span>Dư cầu sang T.sau</span>
+            <Sparkles className="w-4 h-4 text-blue-600" />
+          </div>
+          <p
+            className={`text-lg sm:text-xl font-extrabold ${
+              projectedCarryOut >= 0 ? 'text-blue-700' : 'text-rose-600'
+            }`}
+          >
+            {projectedCarryOut >= 0 ? '+' : ''}
+            {formatVND(projectedCarryOut)}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Tháng {dashboard?.currentMonth.slice(5, 7)}/{dashboard?.currentMonth.slice(0, 4)}
+          </p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
+          <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
+            <span>Nợ chưa thu</span>
             <AlertCircle className="w-4 h-4 text-rose-500" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold text-rose-600">
-            {formatVND(totalOutstanding)}
+            {formatVND(badmintonUnpaid + drinkingUnpaid)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            {simplifiedDebts.transfers.length} lệnh chuyển tối ưu
+          <p className="text-[11px] text-slate-500 mt-1 truncate">
+            Cầu: {formatVND(badmintonUnpaid)} • Nhậu: {formatVND(drinkingUnpaid)}
           </p>
         </div>
       </section>
 
-      {/* Khối Cần chuyển khoản ngay */}
+      {/* Khối 1: Nợ Cầu lông (Thẳng Thủ quỹ) */}
       <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">Cần chuyển khoản ngay</h2>
-            <p className="text-xs text-slate-500">Đã tối ưu cấn trừ nợ vòng tròn</p>
+            <h2 className="text-sm font-bold text-slate-900">
+              Cầu lông cần chuyển Thủ quỹ ({treasurer?.name || 'Thủ quỹ'})
+            </h2>
+            <p className="text-xs text-slate-500">Hóa đơn tháng MAIN &amp; phí vãng lai</p>
           </div>
           <button
             type="button"
             onClick={onGoToDebts}
-            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer shrink-0"
           >
             Xem chi tiết →
           </button>
         </div>
 
-        {simplifiedDebts.transfers.length === 0 ? (
-          <div className="p-6 text-center text-sm text-slate-500">
-            Không có khoản nợ nào cần chuyển khoản! Mọi người đã thanh toán đủ.
+        {(debts?.badminton.monthlyDues.length ?? 0) === 0 &&
+        (debts?.badminton.guestDues.length ?? 0) === 0 ? (
+          <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
+            Mọi thành viên &amp; vãng lai đã đóng đủ tiền Cầu lông!
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {simplifiedDebts.transfers.map((tr) => (
+            {debts?.badminton.monthlyDues.map((d) => (
+              <div key={d.due_id} className="p-3.5 flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-sm text-slate-900">{d.member_name}</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                      Cầu T{d.month.slice(5, 7)}
+                    </span>
+                  </div>
+                  <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                    {formatVND(d.amount)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenQr({
+                      title: `${d.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
+                      subtitle: `Tiền cầu tháng ${d.month.slice(5, 7)}`,
+                      amount: d.amount,
+                      transferContent: d.transferContent,
+                      bankName: debts.badminton.treasurerBank?.bankName || '',
+                      bankBin: debts.badminton.treasurerBank?.bankBin || '',
+                      accountNo: debts.badminton.treasurerBank?.accountNo || '',
+                      accountName: debts.badminton.treasurerBank?.accountName || '',
+                      vietQrUrl: d.vietQrUrl,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>VietQR</span>
+                </button>
+              </div>
+            ))}
+
+            {debts?.badminton.guestDues.map((g) => (
+              <div key={g.attendance_id} className="p-3.5 flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-sm text-slate-900">{g.member_name}</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                      VL {formatShortDateVN(g.session_date)}
+                    </span>
+                  </div>
+                  <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                    {formatVND(g.amount)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenQr({
+                      title: `${g.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
+                      subtitle: `${g.session_title} (${formatDateVN(g.session_date)})`,
+                      amount: g.amount,
+                      transferContent: g.transferContent,
+                      bankName: debts.badminton.treasurerBank?.bankName || '',
+                      bankBin: debts.badminton.treasurerBank?.bankBin || '',
+                      accountNo: debts.badminton.treasurerBank?.accountNo || '',
+                      accountName: debts.badminton.treasurerBank?.accountName || '',
+                      vietQrUrl: g.vietQrUrl,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>VietQR</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Khối 2: Chuyển khoản Ăn nhậu (tối ưu riêng) */}
+      <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">Chuyển khoản Ăn nhậu</h2>
+            <p className="text-xs text-slate-500">Đã cấn trừ món góp &amp; gộp các buổi nhậu</p>
+          </div>
+          <button
+            type="button"
+            onClick={onGoToDebts}
+            className="text-xs font-semibold text-orange-600 hover:text-orange-700 cursor-pointer shrink-0"
+          >
+            Xem chi tiết →
+          </button>
+        </div>
+
+        {simplifiedDrinkingDebts.transfers.length === 0 ? (
+          <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
+            Không có khoản nợ Ăn nhậu nào cần chuyển!
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {simplifiedDrinkingDebts.transfers.map((tr) => (
               <div
                 key={`${tr.fromMember.member_id}-${tr.toMember.member_id}`}
                 className="p-3.5 flex items-center justify-between gap-2.5"
@@ -228,14 +336,14 @@ export function DashboardPage({
                   <div className="flex items-center gap-1.5 flex-wrap text-sm">
                     <span className="font-bold text-slate-900">{tr.fromMember.name}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="font-semibold text-emerald-700">{tr.toMember.name}</span>
+                    <span className="font-semibold text-orange-700">{tr.toMember.name}</span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
                     <span className="font-extrabold text-rose-600 text-sm">
                       {formatVND(tr.amount)}
                     </span>
                     <span>•</span>
-                    <span>Gồm {tr.breakdownSessions.length} khoản</span>
+                    <span>{tr.breakdownSessions.length} buổi nhậu</span>
                   </div>
                 </div>
 
@@ -244,7 +352,7 @@ export function DashboardPage({
                   onClick={() =>
                     onOpenQr({
                       title: `${tr.fromMember.name} → ${tr.toMember.name}`,
-                      subtitle: `Gồm ${tr.breakdownSessions.length} buổi/khoản chưa thanh toán`,
+                      subtitle: `Tiền ăn nhậu (${tr.breakdownSessions.length} buổi)`,
                       amount: tr.amount,
                       transferContent: tr.transferContent,
                       bankName: tr.toMember.bank_name,
@@ -254,10 +362,10 @@ export function DashboardPage({
                       vietQrUrl: tr.vietQrUrl,
                     })
                   }
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs active:scale-95 transition cursor-pointer shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
                 >
                   <QrCode className="w-3.5 h-3.5" />
-                  <span>Hiện mã VietQR</span>
+                  <span>VietQR</span>
                 </button>
               </div>
             ))}
@@ -380,37 +488,41 @@ export function DashboardPage({
         )}
       </section>
 
-      {/* Hoạt động gần đây */}
+      {/* Buổi gần nhất */}
       <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
           <h2 className="text-sm font-bold text-slate-900">Buổi gần nhất</h2>
           <span className="text-xs text-slate-400">{periodSessions.length} buổi trong kỳ</span>
         </div>
-        <div className="divide-y divide-slate-100">
-          {(dashboard?.recentSessions || []).slice(0, 5).map((s) => (
-            <div key={s.session_id} className="px-4 py-3 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      s.type === 'BADMINTON'
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-orange-50 text-orange-700'
-                    }`}
-                  >
-                    {s.type === 'BADMINTON' ? 'Cầu lông' : 'Ăn nhậu'}
-                  </span>
-                  <span className="text-xs text-slate-400">{formatDateVN(s.date)}</span>
+        {(dashboard?.recentSessions || []).length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-400">Chưa có buổi chơi nào.</div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {(dashboard?.recentSessions || []).slice(0, 5).map((s) => (
+              <div key={s.session_id} className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        s.type === 'BADMINTON'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-orange-50 text-orange-700'
+                      }`}
+                    >
+                      {s.type === 'BADMINTON' ? 'Cầu lông' : 'Ăn nhậu'}
+                    </span>
+                    <span className="text-xs text-slate-400">{formatDateVN(s.date)}</span>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-900 truncate mt-1">{s.title}</p>
                 </div>
-                <p className="text-sm font-semibold text-slate-900 truncate mt-1">{s.title}</p>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-bold text-slate-900">{formatVND(s.total_amount)}</p>
+                  <p className="text-[11px] text-slate-500">{s.attendee_count} người</p>
+                </div>
               </div>
-              <div className="text-right shrink-0">
-                <p className="text-sm font-bold text-slate-900">{formatVND(s.total_amount)}</p>
-                <p className="text-[11px] text-slate-500">{s.attendee_count} người</p>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

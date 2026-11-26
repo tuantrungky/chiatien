@@ -1,7 +1,8 @@
 /**
  * Code.gs
  * Entry point cho Google Apps Script Web App (doGet & doPost).
- * Hỗ trợ chống CORS preflight khi Frontend trên Vercel gửi POST text/plain.
+ * Hỗ trợ chống CORS preflight khi Frontend gửi POST text/plain;charset=utf-8,
+ * CacheService 5 phút cho getAll, và LockService cho mọi thao tác ghi.
  */
 
 /**
@@ -15,26 +16,20 @@ function doGet(e) {
     var params = (e && e.parameter) ? e.parameter : {};
     var action = String(params.action || '').trim();
 
-    if (!action) {
+    if (!action || action === 'ping') {
       return jsonResponse_(true, {
         service: 'Caulong-Nhau GAS API',
         status: 'ready',
-        actions: [
-          'bootstrap',
-          'getDashboard',
-          'getMembers',
-          'getSessions',
-          'getSessionDetail',
-          'getFundLedger',
-          'getSettings',
-          'getGuestStats',
-          'getDebts'
-        ]
+        pong: true
       });
     }
 
     var data;
     switch (action) {
+      case 'getAll':
+        data = getCachedAllData_(params.periodType, params.refDate, params.month);
+        break;
+
       case 'bootstrap':
         data = {
           settings: getSettingsMap(),
@@ -66,10 +61,6 @@ function doGet(e) {
         data = getSessionDetail(params.sessionId);
         break;
 
-      case 'getFundLedger':
-        data = getFundLedgerData(params.periodType, params.refDate, params.type);
-        break;
-
       case 'getSettings':
         data = {
           settings: getSettingsMap()
@@ -84,6 +75,14 @@ function doGet(e) {
         data = computeDebtsData();
         break;
 
+      case 'getSchedule':
+        data = getScheduleData(params.month);
+        break;
+
+      case 'getMonthlyBill':
+        data = getMonthlyBillData(params.month);
+        break;
+
       default:
         return jsonError_('BAD_REQUEST', 'Action GET không được hỗ trợ: ' + action);
     }
@@ -91,6 +90,33 @@ function doGet(e) {
     return jsonResponse_(true, data);
   } catch (err) {
     return jsonError_(err.code || 'INTERNAL_ERROR', err.message || 'Lỗi hệ thống không xác định.');
+  }
+}
+
+/**
+ * Đọc getAll qua CacheService (TTL 5 phút, tự vô hiệu khi ghi dữ liệu).
+ */
+function getCachedAllData_(periodType, refDate, month) {
+  var pType = String(periodType || 'MONTH').trim().toUpperCase();
+  var rDate = String(refDate || todayDateStr_()).trim();
+  var mStr = String(month || rDate.slice(0, 7)).trim();
+  var ver = getCacheVersion_();
+  var cacheKey = 'cln_all_v' + ver + '_' + pType + '_' + rDate + '_' + mStr;
+
+  try {
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+    var fresh = getAllData(pType, rDate, mStr);
+    var serialized = JSON.stringify(fresh);
+    if (serialized.length < 95000) {
+      cache.put(cacheKey, serialized, 300);
+    }
+    return fresh;
+  } catch (e) {
+    return getAllData(pType, rDate, mStr);
   }
 }
 
@@ -148,7 +174,7 @@ function doPost(e) {
       });
     }
 
-    // 3. Các action AI & Google Drive (không giữ LockService khi gọi Gemini/Drive)
+    // 3. Action AI quét hóa đơn & Google Drive
     if (action === 'parseBillAI' || action === 'parseReceipt') {
       var imgBase64 = payload.base64Image || payload.imageBase64 || '';
       var imgMime = payload.mimeType || 'image/jpeg';
@@ -167,17 +193,6 @@ function doPost(e) {
         items_summary: aiBill.items_summary,
         suggested_title: aiBill.suggested_title
       });
-    }
-
-    if (action === 'parseVoiceAttendanceAI' || action === 'parseVoiceAttendance') {
-      var activeMembers = getMembersList(true);
-      var voiceResult = parseVoiceAttendance(
-        payload.transcript || '',
-        activeMembers,
-        payload.audioBase64 || payload.audio_base64 || '',
-        payload.mimeType || payload.mime_type || ''
-      );
-      return jsonResponse_(true, voiceResult);
     }
 
     // 4. Các action ghi Google Sheets: dùng LockService để chống xung đột ghi đồng thời
@@ -207,13 +222,28 @@ function doPost(e) {
           result = confirmPaymentRecord(payload, auth.email);
           break;
 
-        case 'upsertMember':
-          result = upsertMemberRecord(payload);
+        case 'generateSchedule':
+          result = generateScheduleRecord(payload);
           break;
 
-        case 'addFundEntry':
-        case 'createFundEntry':
-          result = addFundEntryRecord(payload, auth.email);
+        case 'updateScheduleDay':
+          result = updateScheduleDayRecord(payload);
+          break;
+
+        case 'issueMonthlyBill':
+          result = issueMonthlyBillRecord(payload, auth.email);
+          break;
+
+        case 'markDuePaid':
+          result = markDuePaidRecord(payload, auth.email);
+          break;
+
+        case 'closeMonth':
+          result = closeMonthRecord(payload, auth.email);
+          break;
+
+        case 'upsertMember':
+          result = upsertMemberRecord(payload);
           break;
 
         case 'updateSettings':
@@ -228,6 +258,8 @@ function doPost(e) {
           return jsonError_('BAD_REQUEST', 'Action POST không được hỗ trợ: ' + action);
       }
 
+      // Xóa CacheService ngay sau mọi thao tác ghi
+      bumpCacheVersion_();
       return jsonResponse_(true, result);
     } finally {
       lock.releaseLock();
@@ -237,14 +269,6 @@ function doPost(e) {
   }
 }
 
-/**
- * Tạo response JSON chuẩn theo Envelope của SPEC.md.
- *
- * @param {boolean} ok
- * @param {Object|null} data
- * @param {Object|null=} errorObj
- * @return {GoogleAppsScript.Content.TextOutput}
- */
 function jsonResponse_(ok, data, errorObj) {
   var body = {
     ok: ok,
@@ -260,14 +284,6 @@ function jsonResponse_(ok, data, errorObj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/**
- * Trả về JSON lỗi chuẩn.
- *
- * @param {string} code
- * @param {string} message
- * @param {number=} httpStatusHint Mã HTTP tham khảo (401/403/400/500) nhúng trong error object
- * @return {GoogleAppsScript.Content.TextOutput}
- */
 function jsonError_(code, message, httpStatusHint) {
   var errObj = {
     code: code || 'INTERNAL_ERROR',

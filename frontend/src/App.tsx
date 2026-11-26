@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Layout, type ActiveTab } from './components/Layout';
 import { ReauthModal } from './components/ReauthModal';
@@ -7,12 +7,23 @@ import { VietQRModal, type VietQRModalData } from './components/VietQRModal';
 import { useAuth } from './contexts/AuthContext';
 import { useToast } from './contexts/ToastContext';
 import { useClubData } from './hooks/useClubData';
-import { CreateSessionPage } from './pages/CreateSessionPage';
-import { DashboardPage } from './pages/DashboardPage';
 import { DebtsAndSessionsPage } from './pages/DebtsAndSessionsPage';
-import { FundAndGuestsPage } from './pages/FundAndGuestsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import type { Session } from './types';
+import { MonthlyBadmintonPage } from './pages/MonthlyBadmintonPage';
+import type { ScheduleDay, Session, SessionType } from './types';
+
+// Code-splitting cho các trang nặng (Recharts, Calendar, CreateSession, Settings)
+const DashboardPage = lazy(() =>
+  import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+);
+const CalendarPage = lazy(() =>
+  import('./pages/CalendarPage').then((m) => ({ default: m.CalendarPage }))
+);
+const CreateSessionPage = lazy(() =>
+  import('./pages/CreateSessionPage').then((m) => ({ default: m.CreateSessionPage }))
+);
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
 
 export default function App() {
   const { isEditor } = useAuth();
@@ -20,6 +31,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [qrModalData, setQrModalData] = useState<VietQRModalData | null>(null);
   const [editingSession, setEditingSession] = useState<Session | null>(null);
+  const [prefillPlan, setPrefillPlan] = useState<ScheduleDay | null>(null);
+  const [createInitialType, setCreateInitialType] = useState<SessionType>('BADMINTON');
+  const [createInitialDate, setCreateInitialDate] = useState<string | undefined>(undefined);
 
   const {
     loading,
@@ -30,15 +44,16 @@ export default function App() {
     refDate,
     setPeriodType,
     setRefDate,
-    guestMonth,
-    setGuestMonth,
+    activeMonth,
+    setActiveMonth,
     bootstrap,
     dashboard,
     sessions,
     debts,
-    fundLedger,
+    schedule,
+    monthlyBill,
     guestStats,
-    simplifiedDebts,
+    simplifiedDrinkingDebts,
     refreshAll,
   } = useClubData();
 
@@ -46,6 +61,7 @@ export default function App() {
     if (!isEditor && (activeTab === 'create' || activeTab === 'settings')) {
       setActiveTab('dashboard');
       setEditingSession(null);
+      setPrefillPlan(null);
     }
   }, [isEditor, activeTab]);
 
@@ -62,24 +78,46 @@ export default function App() {
   const handleChangeTab = (tab: ActiveTab) => {
     if (tab !== 'create') {
       setEditingSession(null);
+      setPrefillPlan(null);
     }
     setActiveTab(tab);
   };
 
   const handleEditSession = (session: Session) => {
     if (!isEditor) return;
+    setPrefillPlan(null);
     setEditingSession(session);
+    setActiveTab('create');
+  };
+
+  const handleCheckInPlan = (plan: ScheduleDay) => {
+    if (!isEditor) return;
+    setEditingSession(null);
+    setPrefillPlan(plan);
+    setCreateInitialType('BADMINTON');
+    setCreateInitialDate(plan.date);
+    setActiveTab('create');
+  };
+
+  const handleCreateNewSession = (type: SessionType, date?: string) => {
+    if (!isEditor) return;
+    setEditingSession(null);
+    setPrefillPlan(null);
+    setCreateInitialType(type);
+    setCreateInitialDate(date);
     setActiveTab('create');
   };
 
   const handleManualRefresh = async () => {
     const ok = await refreshAll();
-    if (ok) {
-      toast.success('Đã đồng bộ dữ liệu mới nhất.');
-    } else {
-      toast.error('Không thể đồng bộ dữ liệu mới.');
-    }
+    if (ok) toast.success('Đã đồng bộ dữ liệu mới nhất.');
+    else toast.error('Không thể đồng bộ dữ liệu mới.');
   };
+
+  const outstandingCount =
+    (debts?.badminton.monthlyDues.length ?? 0) +
+    (debts?.badminton.guestDues.length ?? 0) +
+    simplifiedDrinkingDebts.transfers.length;
 
   return (
     <Layout
@@ -90,7 +128,7 @@ export default function App() {
       refreshing={refreshing}
       lastUpdatedAt={lastUpdatedAt}
       onRefresh={() => void handleManualRefresh()}
-      outstandingCount={simplifiedDebts.transfers.length}
+      outstandingCount={outstandingCount}
     >
       {error && (
         <div className="mb-4 rounded-2xl bg-rose-50 border border-rose-200 px-4 py-3 flex items-start gap-2.5 text-xs sm:text-sm text-rose-800">
@@ -105,62 +143,82 @@ export default function App() {
       {loading ? (
         <SkeletonLoader />
       ) : (
-        <>
+        <Suspense fallback={<SkeletonLoader />}>
           {activeTab === 'dashboard' && (
             <DashboardPage
               periodType={periodType}
               refDate={refDate}
               onChangePeriodType={setPeriodType}
               onChangeRefDate={setRefDate}
+              bootstrap={bootstrap}
               dashboard={dashboard}
               sessions={sessions}
-              fundLedger={fundLedger}
-              simplifiedDebts={simplifiedDebts}
+              debts={debts}
+              simplifiedDrinkingDebts={simplifiedDrinkingDebts}
               onOpenQr={setQrModalData}
               onGoToDebts={() => setActiveTab('debts')}
             />
           )}
 
+          {activeTab === 'calendar' && bootstrap && (
+            <CalendarPage
+              activeMonth={activeMonth}
+              onChangeMonth={setActiveMonth}
+              schedule={schedule}
+              sessions={sessions}
+              members={bootstrap.members}
+              settings={bootstrap.settings}
+              onRefreshAll={refreshAll}
+              onCheckInPlan={handleCheckInPlan}
+              onCreateDrinkingOnDate={(d) => handleCreateNewSession('DRINKING', d)}
+            />
+          )}
+
           {activeTab === 'debts' && (
             <DebtsAndSessionsPage
-              simplifiedDebts={simplifiedDebts}
+              bootstrap={bootstrap}
               debts={debts}
+              simplifiedDrinkingDebts={simplifiedDrinkingDebts}
               sessions={sessions}
               onOpenQr={setQrModalData}
-              onRefreshAll={async () => {
-                await refreshAll();
-              }}
+              onRefreshAll={refreshAll}
               onEditSession={handleEditSession}
+              onCreateNewSession={(t) => handleCreateNewSession(t)}
+            />
+          )}
+
+          {activeTab === 'monthly' && (
+            <MonthlyBadmintonPage
+              bootstrap={bootstrap}
+              monthlyBill={monthlyBill}
+              guestStats={guestStats}
+              activeMonth={activeMonth}
+              onChangeMonth={setActiveMonth}
+              onOpenQr={setQrModalData}
+              onRefreshAll={refreshAll}
             />
           )}
 
           {activeTab === 'create' && isEditor && bootstrap && (
             <CreateSessionPage
+              key={editingSession?.session_id || prefillPlan?.plan_id || `${createInitialType}-${createInitialDate || 'new'}`}
               members={bootstrap.members}
               settings={bootstrap.settings}
               editingSession={editingSession}
+              prefillPlan={prefillPlan}
+              initialType={createInitialType}
+              initialDate={createInitialDate}
               onCancelEdit={() => {
                 setEditingSession(null);
-                setActiveTab('debts');
+                setPrefillPlan(null);
+                setActiveTab(prefillPlan ? 'calendar' : 'debts');
               }}
               onSaved={async () => {
                 await refreshAll();
+                const cameFromPlan = Boolean(prefillPlan);
                 setEditingSession(null);
-                setActiveTab('debts');
-              }}
-            />
-          )}
-
-          {activeTab === 'fund' && (
-            <FundAndGuestsPage
-              bootstrap={bootstrap}
-              fundLedger={fundLedger}
-              guestStats={guestStats}
-              guestMonth={guestMonth}
-              onChangeGuestMonth={setGuestMonth}
-              onOpenQr={setQrModalData}
-              onRefreshAll={async () => {
-                await refreshAll();
+                setPrefillPlan(null);
+                setActiveTab(cameFromPlan ? 'calendar' : 'debts');
               }}
             />
           )}
@@ -169,12 +227,10 @@ export default function App() {
             <SettingsPage
               members={bootstrap.members}
               settings={bootstrap.settings}
-              onRefreshAll={async () => {
-                await refreshAll();
-              }}
+              onRefreshAll={refreshAll}
             />
           )}
-        </>
+        </Suspense>
       )}
 
       <VietQRModal

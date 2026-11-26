@@ -1,6 +1,6 @@
 # Hướng Dẫn Deploy Backend Google Apps Script (GAS)
 
-Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Google Drive, Google OAuth Client ID, Gemini API Key và deploy mã nguồn trong `/gas-backend` lên Google Apps Script làm REST API cho ứng dụng **Quản lý Quỹ Cầu Lông & Chia Tiền Ăn Nhậu**.
+Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Google Drive, Google OAuth Client ID, Gemini API Key và deploy mã nguồn trong `/gas-backend` lên Google Apps Script làm REST API cho ứng dụng **Quản lý Lịch Cầu Lông & Chia Tiền Ăn Nhậu**.
 
 ---
 
@@ -57,7 +57,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 | :--- | :--- | :--- |
 | `GOOGLE_CLIENT_ID` | `123456...apps.googleusercontent.com` | Phải khớp tuyệt đối với `VITE_GOOGLE_CLIENT_ID` ở Frontend |
 | `GEMINI_API_KEY` | `AIzaSy...` | API key lấy ở Google AI Studio |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model Gemini hỗ trợ cả text, ảnh và audio |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model Gemini hỗ trợ đọc ảnh hóa đơn (Vision) |
 | `ROOT_DRIVE_FOLDER_ID` | `1AbCdEf...` | ID thư mục `CLB_Hoa_Don` trên Google Drive |
 
 3. Bấm **Save script properties**.
@@ -66,7 +66,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 
 ---
 
-## Bước 5: Chạy hàm `setupDatabase()` 1 chạm
+## Bước 5: Chạy hàm `setupDatabase()` (Khởi tạo / Nâng cấp lên 11 tabs)
 
 1. Quay lại tab **Editor** (`</>`), chọn file **`SheetService.gs`**.
 2. Trên thanh công cụ phía trên, ở dropdown chọn hàm (bên cạnh nút Run/Debug), chọn **`setupDatabase`**.
@@ -74,7 +74,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 4. Lần đầu chạy, Google sẽ hiện hộp thoại yêu cầu **Review permissions**:
    - Chọn tài khoản Google của bạn.
    - Nếu thấy cảnh báo *"Google hasn't verified this app"*, bấm **Advanced** -> **Go to CaulongNhau-Backend (unsafe)** -> **Allow**.
-5. Mở lại Google Sheet sẽ thấy tự động xuất hiện đủ **7 tabs**: `Members`, `Sessions`, `Attendance`, `Fund_Ledger`, `Settlements`, `Settings`, `Editors` với dòng header đã đóng băng và `Settings` có sẵn dữ liệu mặc định.
+5. Mở lại Google Sheet sẽ thấy đủ **11 tabs**: `Members`, `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Fund_Ledger`, `Settings`, `Editors` với dòng header đã đóng băng, định dạng plain text `@` cho cột mã/ngày/SĐT/STK và `Settings` có sẵn cấu hình mặc định (hàm chạy idempotent, an toàn khi nâng cấp từ bản cũ).
 
 ---
 
@@ -96,7 +96,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
    - `account_no`: `'0123456789` (gõ dấu nháy đơn `'` phía trước để giữ số `0` đầu)
    - `account_name`: `NGUYEN ANH TUAN`
    - `is_active`: `TRUE`
-3. Mở tab **`Settings`**, tìm dòng `treasurer_member_id` và điền cột `value` là **`MEM_001`**.
+3. Mở tab **`Settings`**, tìm dòng `treasurer_member_id` và điền cột `value` là **`MEM_001`**, đồng thời cập nhật `court_price_per_hour`, `shuttle_price`, `guest_fee` nếu cần (hoặc chỉnh trực tiếp trong trang **Cài đặt** trên Web App).
 
 ---
 
@@ -105,7 +105,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 1. Trên góc phải Apps Script IDE, bấm nút **Deploy** -> **New deployment**.
 2. Bấm biểu tượng bánh răng bên cạnh **Select type** -> chọn **Web app**.
 3. Điền cấu hình:
-   - **Description**: `v1.0 - Initial release`
+   - **Description**: `v2.0 - Schedule, Monthly Badminton Billing & Separated Debts`
    - **Execute as**: **Me** *(rất quan trọng: giúp Viewer không cần đăng nhập vẫn đọc được dữ liệu thông qua quyền của bạn)*
    - **Who has access**: **Anyone** *(bắt buộc để Frontend trên Vercel gọi được mà không bị chặn trang đăng nhập Google)*
 4. Bấm **Deploy** -> copy **Web app URL** (có dạng `https://script.google.com/macros/s/AKfycb.../exec`).
@@ -120,15 +120,20 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 
 Mở trực tiếp trên trình duyệt (hoặc chạy PowerShell/curl):
 ```text
-https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec?action=bootstrap
+https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec?action=getAll
 ```
 Nếu nhận được JSON dạng:
 ```json
 {
   "ok": true,
   "data": {
-    "settings": { "club_name": "CLB Cầu Lông & Nhậu", ... },
-    "members": [ ... ]
+    "bootstrap": { "settings": { "club_name": "CLB Cầu Lông & Nhậu" }, "members": [ ... ] },
+    "dashboard": { ... },
+    "sessions": [ ... ],
+    "debts": { "badminton": { ... }, "drinking": { ... } },
+    "schedule": { ... },
+    "monthlyBill": { ... },
+    "guestStats": { ... }
   },
   "meta": { "timestamp": "..." },
   "error": null

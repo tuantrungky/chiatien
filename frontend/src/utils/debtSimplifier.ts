@@ -1,17 +1,18 @@
 /**
  * debtSimplifier.ts
- * Thuật toán tối ưu hóa số lần chuyển khoản (Greedy Debt Simplification).
- * - Cộng dồn toàn bộ các khoản chưa thanh toán (is_paid = false) theo thời gian
- * - Hỗ trợ hoàn ứng tiền sân/cầu/nước chưa trả từ Fund_Ledger (gắn về Thủ quỹ)
- * - Hỗ trợ các giao dịch đã trả một phần (Settlements với is_reconciled = false)
- * - Cấn trừ nợ vòng tròn (A -> B -> C thành A -> C)
+ * Thuật toán tối ưu hóa chuyển khoản CHỈ DÀNH CHO NHÓM ĂN NHẬU (DRINKING).
+ * - Tiền Cầu lông (BADMINTON) tách biệt hoàn toàn: MAIN & GUEST đều chuyển thẳng Thủ quỹ,
+ *   không bao giờ cấn trừ chéo với tiền Ăn nhậu hay tạo nợ chéo giữa các MAIN.
  */
 
 import type {
   Attendance,
+  BadmintonDuesData,
+  BadmintonGuestDueItem,
+  BadmintonMonthlyDueItem,
   DebtBreakdownSession,
-  FundLedgerEntry,
   Member,
+  MonthlyDue,
   NetBalanceItem,
   Session,
   Settlement,
@@ -20,12 +21,10 @@ import type {
 } from '../types';
 import { buildTransferContent, buildVietQrUrl } from './vietqr';
 
-export interface SimplifyDebtsInput {
+export interface SimplifyDrinkingDebtsInput {
   attendances: Attendance[];
   sessions: Session[];
   members: Member[];
-  treasurerMemberId?: string;
-  unpaidReimbursements?: FundLedgerEntry[];
   unreconciledSettlements?: Settlement[];
   transferPrefix?: string;
   vietqrTemplate?: string;
@@ -49,30 +48,26 @@ function createPlaceholderMember(memberId: string): Member {
 }
 
 /**
- * Tính số dư ròng (Net Balance) và chạy thuật toán tham lam (Greedy)
- * ghép người nợ nhiều nhất với người được nhận nhiều nhất để tối thiểu hóa giao dịch.
+ * Tối ưu hóa chuyển khoản riêng cho các buổi Ăn nhậu (DRINKING):
+ * - Dùng `net_amount` (Phần chia - Đã góp). Nếu dữ liệu cũ chưa có `net_amount` (0) nhưng
+ *   `fee_amount > 0` và `creditor_id`, tự suy ra nợ theo mô hình cũ để tương thích ngược.
+ * - Tuyệt đối bỏ qua mọi Attendance của BADMINTON.
  */
-export function simplifyDebts(input: SimplifyDebtsInput): SimplifiedDebtResult {
+export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebtResult {
   const {
     attendances,
     sessions,
     members,
-    treasurerMemberId = '',
-    unpaidReimbursements = [],
     unreconciledSettlements = [],
     transferPrefix = 'CLN',
     vietqrTemplate = 'compact2',
   } = input;
 
   const membersMap = new Map<string, Member>();
-  for (const m of members) {
-    membersMap.set(m.member_id, m);
-  }
+  for (const m of members) membersMap.set(m.member_id, m);
 
   const sessionsMap = new Map<string, Session>();
-  for (const s of sessions) {
-    sessionsMap.set(s.session_id, s);
-  }
+  for (const s of sessions) sessionsMap.set(s.session_id, s);
 
   const netMap = new Map<string, number>();
   const breakdownByDebtor = new Map<string, DebtBreakdownSession[]>();
@@ -82,71 +77,64 @@ export function simplifyDebts(input: SimplifyDebtsInput): SimplifiedDebtResult {
     netMap.set(memberId, (netMap.get(memberId) || 0) + delta);
   };
 
-  const pushBreakdown = (memberId: string, item: DebtBreakdownSession) => {
-    if (!breakdownByDebtor.has(memberId)) {
-      breakdownByDebtor.set(memberId, []);
-    }
-    breakdownByDebtor.get(memberId)!.push(item);
-  };
-
-  // 1. Cộng dồn mọi khoản Attendance chưa thanh toán (is_paid === false)
+  // Nhóm các dòng Attendance DRINKING chưa thanh toán theo buổi
+  // Chú ý quy ước dấu:
+  // - Trong Attendance.net_amount: > 0 là người đó phải TRẢ thêm, < 0 là người đó được NHẬN lại
+  // - Trong đồ thị netMap (chuẩn tài khoản): < 0 là CON NỢ (phải chuyển), > 0 là CHỦ NỢ (được nhận)
   for (const att of attendances) {
-    if (att.is_paid) continue;
-    const fee = Math.round(Number(att.fee_amount) || 0);
-    if (fee <= 0) continue;
+    if (att.session_type !== 'DRINKING' || att.is_paid) continue;
 
     const session = sessionsMap.get(att.session_id);
-    const creditorId = String(
-      att.creditor_id || session?.payer_id || treasurerMemberId || ''
-    ).trim();
-    const debtorId = String(att.member_id || '').trim();
+    const mId = String(att.member_id || '').trim();
+    if (!mId) continue;
 
-    if (!debtorId || !creditorId || debtorId === creditorId) continue;
+    const rawNet = Math.round(Number(att.net_amount) || 0);
+    if (rawNet !== 0) {
+      // net_amount > 0 => con nợ => netMap giảm (-rawNet)
+      // net_amount < 0 => chủ nợ => netMap tăng (-rawNet > 0)
+      addBalance(mId, -rawNet);
 
-    addBalance(debtorId, -fee);
-    addBalance(creditorId, fee);
-
-    const creditorName = membersMap.get(creditorId)?.name || att.creditor_name || creditorId;
-    pushBreakdown(debtorId, {
-      attendanceId: att.attendance_id,
-      sessionId: att.session_id,
-      sessionDate: att.session_date || session?.date || '',
-      sessionTitle: session?.title || (att.session_type === 'BADMINTON' ? 'Cầu lông' : 'Ăn nhậu'),
-      sessionType: att.session_type,
-      amount: fee,
-      originalCreditorId: creditorId,
-      originalCreditorName: creditorName,
-    });
-  }
-
-  // 2. Cộng dồn các khoản chi phí quỹ do thành viên ứng tiền chưa hoàn trả (gắn về Thủ quỹ)
-  for (const entry of unpaidReimbursements) {
-    if (entry.type !== 'EXPENSE' || entry.is_paid) continue;
-    const amount = Math.round(Number(entry.amount) || 0);
-    const memberId = String(entry.member_id || '').trim();
-    if (amount <= 0 || !memberId || !treasurerMemberId || memberId === treasurerMemberId) {
+      if (rawNet > 0) {
+        if (!breakdownByDebtor.has(mId)) breakdownByDebtor.set(mId, []);
+        breakdownByDebtor.get(mId)!.push({
+          attendanceId: att.attendance_id,
+          sessionId: att.session_id,
+          sessionDate: att.session_date || session?.date || '',
+          sessionTitle: session?.title || 'Ăn nhậu',
+          sessionType: 'DRINKING',
+          amount: rawNet,
+          contributedAmount: Math.round(Number(att.contributed_amount) || 0),
+          perPersonAmount: Math.round(Number(att.fee_amount) || 0),
+        });
+      }
       continue;
     }
 
-    addBalance(treasurerMemberId, -amount);
-    addBalance(memberId, amount);
+    // Tương thích ngược nếu row Attendance cũ chỉ có fee_amount + creditor_id
+    const fee = Math.round(Number(att.fee_amount) || 0);
+    const creditorId = String(att.creditor_id || session?.payer_id || '').trim();
+    if (fee > 0 && creditorId && creditorId !== mId) {
+      addBalance(mId, -fee);
+      addBalance(creditorId, fee);
 
-    const creditorName = membersMap.get(memberId)?.name || entry.member_name || memberId;
-    pushBreakdown(treasurerMemberId, {
-      ledgerId: entry.ledger_id,
-      sessionId: entry.session_id || undefined,
-      sessionDate: entry.date,
-      sessionTitle: entry.description || 'Chi hộ quỹ CLB',
-      sessionType: 'REIMBURSEMENT',
-      amount,
-      originalCreditorId: memberId,
-      originalCreditorName: creditorName,
-    });
+      if (!breakdownByDebtor.has(mId)) breakdownByDebtor.set(mId, []);
+      breakdownByDebtor.get(mId)!.push({
+        attendanceId: att.attendance_id,
+        sessionId: att.session_id,
+        sessionDate: att.session_date || session?.date || '',
+        sessionTitle: session?.title || 'Ăn nhậu',
+        sessionType: 'DRINKING',
+        amount: fee,
+        contributedAmount: 0,
+        perPersonAmount: fee,
+      });
+    }
   }
 
-  // 3. Cấn trừ các giao dịch thanh toán một phần chưa đối soát xong (is_reconciled === false)
+  // Cấn trừ các giao dịch DRINKING đã chuyển trước một phần (is_reconciled === false)
   for (const st of unreconciledSettlements) {
     if (st.is_reconciled) continue;
+    if (st.category && st.category !== 'DRINKING') continue;
     const amount = Math.round(Number(st.amount) || 0);
     const fromId = String(st.from_member_id || '').trim();
     const toId = String(st.to_member_id || '').trim();
@@ -156,7 +144,6 @@ export function simplifyDebts(input: SimplifyDebtsInput): SimplifiedDebtResult {
     addBalance(toId, -amount);
   }
 
-  // 4. Tách danh sách Debtors (< 0) và Creditors (> 0)
   const netBalances: NetBalanceItem[] = [];
   const debtors: Array<{ memberId: string; amount: number }> = [];
   const creditors: Array<{ memberId: string; amount: number }> = [];
@@ -175,12 +162,10 @@ export function simplifyDebts(input: SimplifyDebtsInput): SimplifiedDebtResult {
     }
   }
 
-  // Sắp xếp giảm dần theo trị tuyệt đối (tie-break theo memberId để kết quả deterministic)
   debtors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
   creditors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
   netBalances.sort((a, b) => a.balance - b.balance);
 
-  // 5. Greedy Matching: ghép người nợ nhiều nhất với người được nhận nhiều nhất
   const transfers: SimplifiedTransferDetail[] = [];
   let i = 0;
   let j = 0;
@@ -230,5 +215,128 @@ export function simplifyDebts(input: SimplifyDebtsInput): SimplifiedDebtResult {
     netBalances,
     transfers,
     totalOutstanding,
+  };
+}
+
+/**
+ * Xây dựng danh sách công nợ Cầu lông tách biệt (luôn chuyển thẳng Thủ quỹ,
+ * gồm hóa đơn tháng của MAIN và phí theo buổi của GUEST).
+ */
+export function buildBadmintonDues(params: {
+  monthlyDues: MonthlyDue[];
+  attendances: Attendance[];
+  sessions: Session[];
+  members: Member[];
+  treasurerMemberId: string;
+  transferPrefix?: string;
+  vietqrTemplate?: string;
+}): BadmintonDuesData {
+  const {
+    monthlyDues,
+    attendances,
+    sessions,
+    members,
+    treasurerMemberId,
+    transferPrefix = 'CKCL',
+    vietqrTemplate = 'compact2',
+  } = params;
+
+  const membersMap = new Map<string, Member>();
+  for (const m of members) membersMap.set(m.member_id, m);
+
+  const sessionsMap = new Map<string, Session>();
+  for (const s of sessions) sessionsMap.set(s.session_id, s);
+
+  const treasurer = membersMap.get(treasurerMemberId);
+  const treasurerBank =
+    treasurer && treasurer.bank_bin && treasurer.account_no
+      ? {
+          bankBin: treasurer.bank_bin,
+          bankName: treasurer.bank_name,
+          accountNo: treasurer.account_no,
+          accountName: treasurer.account_name || treasurer.name,
+        }
+      : null;
+
+  const monthlyItems: BadmintonMonthlyDueItem[] = monthlyDues
+    .filter((d) => !d.is_paid && d.amount > 0)
+    .map((d) => {
+      const mName = membersMap.get(d.member_id)?.name || d.member_name || d.member_id;
+      const content = buildTransferContent(
+        transferPrefix,
+        mName,
+        `${treasurer?.name || 'Thu quy'} cau T${d.month.slice(5, 7)}`
+      );
+      return {
+        due_id: d.due_id,
+        month: d.month,
+        member_id: d.member_id,
+        member_name: mName,
+        amount: d.amount,
+        is_paid: d.is_paid,
+        paid_at: d.paid_at,
+        transferContent: content,
+        vietQrUrl: treasurer
+          ? buildVietQrUrl({
+              bankBin: treasurer.bank_bin,
+              accountNo: treasurer.account_no,
+              accountName: treasurer.account_name || treasurer.name,
+              amount: d.amount,
+              addInfo: content,
+              template: vietqrTemplate,
+            })
+          : null,
+      };
+    });
+
+  const guestItems: BadmintonGuestDueItem[] = attendances
+    .filter(
+      (a) =>
+        a.session_type === 'BADMINTON' &&
+        a.member_type_snapshot === 'GUEST' &&
+        !a.is_paid &&
+        a.fee_amount > 0
+    )
+    .map((a) => {
+      const mName = membersMap.get(a.member_id)?.name || a.member_name || a.member_id;
+      const s = sessionsMap.get(a.session_id);
+      const content = buildTransferContent(
+        transferPrefix,
+        mName,
+        `${treasurer?.name || 'Thu quy'} san ${a.session_date.slice(8, 10)}/${a.session_date.slice(5, 7)}`
+      );
+      return {
+        attendance_id: a.attendance_id,
+        session_id: a.session_id,
+        session_date: a.session_date,
+        session_title: s?.title || 'Cầu lông',
+        member_id: a.member_id,
+        member_name: mName,
+        amount: a.fee_amount,
+        transferContent: content,
+        vietQrUrl: treasurer
+          ? buildVietQrUrl({
+              bankBin: treasurer.bank_bin,
+              accountNo: treasurer.account_no,
+              accountName: treasurer.account_name || treasurer.name,
+              amount: a.fee_amount,
+              addInfo: content,
+              template: vietqrTemplate,
+            })
+          : null,
+      };
+    });
+
+  const totalMonthlyUnpaid = monthlyItems.reduce((sum, x) => sum + x.amount, 0);
+  const totalGuestUnpaid = guestItems.reduce((sum, x) => sum + x.amount, 0);
+
+  return {
+    treasurerMemberId,
+    treasurerBank,
+    monthlyDues: monthlyItems,
+    guestDues: guestItems,
+    totalMonthlyUnpaid,
+    totalGuestUnpaid,
+    totalOutstanding: totalMonthlyUnpaid + totalGuestUnpaid,
   };
 }

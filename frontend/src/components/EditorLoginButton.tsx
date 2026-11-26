@@ -11,8 +11,15 @@ declare global {
         id?: {
           initialize: (config: {
             client_id: string;
+            auto_select?: boolean;
             callback: (response: { credential?: string }) => void;
           }) => void;
+          prompt: (
+            listener?: (notification: {
+              isNotDisplayed: () => boolean;
+              isSkippedMoment: () => boolean;
+            }) => void
+          ) => void;
           renderButton: (
             parent: HTMLElement,
             options: { theme?: string; size?: string; width?: number; text?: string; locale?: string }
@@ -184,7 +191,7 @@ export function EditorLoginButton() {
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Đăng nhập Quản lý (Editor)</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Chỉ email có trong tab Editors mới được tạo buổi &amp; gạch nợ.
+                    Phiên đăng nhập lưu trên trình duyệt để thao tác nhanh.
                   </p>
                 </div>
                 <button

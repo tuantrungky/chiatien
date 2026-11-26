@@ -1,9 +1,18 @@
 /**
- * Schema 7 tabs Google Sheets & API Contract giữa Frontend và GAS Backend
+ * Schema 11 tabs Google Sheets & API Contract giữa Frontend và GAS Backend
  */
 
 export type MemberType = 'MAIN' | 'GUEST';
 export type SessionType = 'BADMINTON' | 'DRINKING';
+export type DrinkingVenueType = 'RESTAURANT' | 'HOME';
+export type SessionItemKind = 'BILL' | 'ITEM';
+export type ScheduleStatus = 'PLANNED' | 'DONE' | 'CANCELLED';
+export type MonthlyBillStatus = 'OPEN' | 'CLOSED';
+export type PaymentMethod = 'VIETQR' | 'CASH' | 'BANK_TRANSFER';
+export type EditorRole = 'ADMIN' | 'EDITOR';
+export type PeriodType = 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR' | 'ALL';
+
+// Giữ các type FundLedger để đọc dữ liệu lịch sử (không tham gia tính công nợ mới)
 export type FundLedgerType = 'INCOME' | 'EXPENSE';
 export type FundLedgerCategory =
   | 'MONTHLY_FUND'
@@ -14,12 +23,8 @@ export type FundLedgerCategory =
   | 'WATER'
   | 'OTHER_EXPENSE';
 
-export type PaymentMethod = 'VIETQR' | 'CASH' | 'BANK_TRANSFER';
-export type EditorRole = 'ADMIN' | 'EDITOR';
-export type PeriodType = 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR' | 'ALL';
-
 // ============================================================================
-// 1. SCHEMA 7 TABS GOOGLE SHEETS
+// 1. SCHEMA GOOGLE SHEETS (11 TABS)
 // ============================================================================
 
 export interface Member {
@@ -37,6 +42,23 @@ export interface Member {
   updated_at: string;
 }
 
+export interface CourtLineItem {
+  label: string;
+  courts: number;
+  hours: number;
+  pricePerHour: number;
+  amount?: number;
+  isExtra?: boolean;
+}
+
+export interface BadmintonCostDetail {
+  courtLines: CourtLineItem[];
+  shuttlePrice: number;
+  courtOverride: boolean;
+  shuttleOverride: boolean;
+  totalOverride: boolean;
+}
+
 export interface Session {
   session_id: string;
   date: string; // YYYY-MM-DD
@@ -52,9 +74,26 @@ export interface Session {
   receipt_url: string;
   receipt_summary: string;
   note: string;
+  court_amount: number;
+  shuttle_qty: number;
+  shuttle_amount: number;
+  other_amount: number;
+  cost_detail: string; // JSON stringified BadmintonCostDetail
+  venue_type: DrinkingVenueType | '';
+  plan_id: string;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface SessionItem {
+  item_id: string;
+  session_id: string;
+  member_id: string;
+  member_name?: string;
+  kind: SessionItemKind;
+  item_name: string;
+  amount: number;
 }
 
 export interface Attendance {
@@ -68,15 +107,60 @@ export interface Attendance {
   fee_amount: number;
   creditor_id: string;
   creditor_name?: string;
+  contributed_amount: number;
+  net_amount: number; // + phải trả thêm, - được nhận lại (DRINKING) hoặc phí vãng lai (BADMINTON GUEST)
   is_paid: boolean;
   paid_at: string;
   settlement_id: string;
   note: string;
 }
 
+export interface ScheduleDay {
+  plan_id: string;
+  date: string; // YYYY-MM-DD
+  start_time: string; // HH:mm
+  end_time: string; // HH:mm
+  courts: number;
+  planned_member_ids: string; // comma-separated member_ids
+  status: ScheduleStatus;
+  session_id: string;
+  note: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MonthlyBill {
+  month: string; // YYYY-MM
+  estimate: number;
+  carry_in: number;
+  to_collect: number;
+  member_count: number;
+  per_member: number;
+  billed_total: number;
+  actual_cost: number;
+  actual_cost_override: number | null;
+  guest_income: number;
+  carry_out: number;
+  status: MonthlyBillStatus;
+  created_by: string;
+  closed_at: string;
+  updated_at?: string;
+}
+
+export interface MonthlyDue {
+  due_id: string;
+  month: string;
+  member_id: string;
+  member_name?: string;
+  amount: number;
+  is_paid: boolean;
+  paid_at: string;
+  confirmed_by: string;
+}
+
 export interface FundLedgerEntry {
   ledger_id: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   type: FundLedgerType;
   category: FundLedgerCategory;
   amount: number;
@@ -84,7 +168,7 @@ export interface FundLedgerEntry {
   member_name?: string;
   session_id: string;
   attendance_id: string;
-  period: string; // YYYY-MM
+  period: string;
   is_paid: boolean;
   paid_at: string;
   settlement_id: string;
@@ -104,6 +188,7 @@ export interface Settlement {
   amount: number;
   settled_at: string;
   method: PaymentMethod;
+  category?: SessionType;
   source_attendance_ids: string;
   source_ledger_ids: string;
   is_reconciled: boolean;
@@ -123,14 +208,18 @@ export interface SettingRow {
 export interface SettingsMap {
   club_name: string;
   treasurer_member_id: string;
-  monthly_fee: number;
   guest_fee: number;
-  default_monthly_fund: number;
-  default_guest_fee: number;
+  court_price_per_hour: number;
+  shuttle_price: number;
+  default_court_count: number;
+  default_play_hours: number;
   drive_folder_id: string;
   rounding_unit: number;
   vietqr_template: string;
   transfer_prefix: string;
+  monthly_fee?: number;
+  default_monthly_fund?: number;
+  default_guest_fee?: number;
   raw?: SettingRow[];
 }
 
@@ -183,18 +272,45 @@ export interface BootstrapData {
   members: Member[];
 }
 
-export interface MonthlyFundStatusItem {
-  member_id: string;
-  name: string;
-  paidAmount: number;
-  isPaid: boolean;
-}
-
 export interface BankInfo {
   bankBin: string;
   bankName: string;
   accountNo: string;
   accountName: string;
+}
+
+export interface BadmintonMonthlyDueItem {
+  due_id: string;
+  month: string;
+  member_id: string;
+  member_name: string;
+  amount: number;
+  is_paid: boolean;
+  paid_at: string;
+  transferContent: string;
+  vietQrUrl: string | null;
+}
+
+export interface BadmintonGuestDueItem {
+  attendance_id: string;
+  session_id: string;
+  session_date: string;
+  session_title: string;
+  member_id: string;
+  member_name: string;
+  amount: number;
+  transferContent: string;
+  vietQrUrl: string | null;
+}
+
+export interface BadmintonDuesData {
+  treasurerMemberId: string;
+  treasurerBank: BankInfo | null;
+  monthlyDues: BadmintonMonthlyDueItem[];
+  guestDues: BadmintonGuestDueItem[];
+  totalMonthlyUnpaid: number;
+  totalGuestUnpaid: number;
+  totalOutstanding: number;
 }
 
 export interface SimplifiedTransfer {
@@ -208,39 +324,62 @@ export interface SimplifiedTransfer {
   vietQrUrl: string | null;
 }
 
+export interface NetBalanceItem {
+  memberId: string;
+  name: string;
+  balance: number;
+}
+
+export interface DrinkingDebtsData {
+  netBalances: NetBalanceItem[];
+  simplifiedTransfers: SimplifiedTransfer[];
+  unpaidAttendances: Attendance[];
+  recentSettlements: Settlement[];
+  totalOutstanding: number;
+}
+
+export interface SeparatedDebtsData {
+  treasurerMemberId: string;
+  badminton: BadmintonDuesData;
+  drinking: DrinkingDebtsData;
+}
+
 export interface DashboardData {
   period: PeriodRange;
   currentMonth: string;
-  fund: {
-    currentBalance: number;
-    periodIncome: number;
-    periodExpense: number;
-    pendingReimbursement: number;
+  badminton: {
+    periodCost: number;
+    sessionCount: number;
+    guestIncomeInMonth: number;
+    carryIn: number;
+    projectedCarryOut: number;
+    unpaidTotal: number;
   };
-  debtsSummary: {
-    totalOutstanding: number;
-    pendingTransferCount: number;
+  drinking: {
+    periodCost: number;
+    sessionCount: number;
+    unpaidTotal: number;
   };
-  simplifiedTransfers: SimplifiedTransfer[];
   recentSessions: Session[];
-  monthlyFundStatus: MonthlyFundStatusItem[];
 }
 
 export interface SessionDetailData {
   session: Session;
   attendances: Attendance[];
-  linkedExpenses: FundLedgerEntry[];
+  items: SessionItem[];
 }
 
-export interface FundLedgerData {
-  period: PeriodRange;
-  summary: {
-    openingBalance: number;
-    totalIncome: number;
-    totalExpense: number;
-    closingBalance: number;
+export interface MonthlyBillData {
+  month: string;
+  bill: MonthlyBill;
+  dues: BadmintonMonthlyDueItem[];
+  sessions: Session[];
+  guestIncomeDetail: {
+    paidCount: number;
+    paidAmount: number;
+    unpaidAmount: number;
   };
-  entries: FundLedgerEntry[];
+  suggestedEstimateFromSchedule: number;
 }
 
 export interface GuestStatSessionItem {
@@ -275,45 +414,34 @@ export interface GuestStatsData {
   guests: GuestStatItem[];
 }
 
-export interface NetBalanceItem {
-  memberId: string;
-  name: string;
-  balance: number;
+export interface ScheduleData {
+  month: string;
+  days: ScheduleDay[];
 }
 
-export interface UnpaidReimbursementItem {
-  ledger_id: string;
-  date: string;
-  category: FundLedgerCategory;
-  amount: number;
-  member_id: string;
-  member_name: string;
-  description: string;
-}
-
-export interface DebtsData {
-  treasurerMemberId: string;
-  netBalances: NetBalanceItem[];
-  simplifiedTransfers: SimplifiedTransfer[];
-  unpaidAttendances: Attendance[];
-  unpaidReimbursements: UnpaidReimbursementItem[];
-  recentSettlements: Settlement[];
+export interface AllDataResponse {
+  bootstrap: BootstrapData;
+  dashboard: DashboardData;
+  sessions: Session[];
+  debts: SeparatedDebtsData;
+  schedule: ScheduleData;
+  monthlyBill: MonthlyBillData;
+  guestStats: GuestStatsData;
 }
 
 // ============================================================================
-// 3. CLIENT-SIDE DEBT SIMPLIFIER OUTPUT TYPES
+// 3. CLIENT-SIDE DEBT SIMPLIFIER (CHỈ DÙNG CHO ĂN NHẬU)
 // ============================================================================
 
 export interface DebtBreakdownSession {
-  attendanceId?: string;
-  ledgerId?: string;
-  sessionId?: string;
+  attendanceId: string;
+  sessionId: string;
   sessionDate: string;
   sessionTitle: string;
-  sessionType: SessionType | 'REIMBURSEMENT';
-  amount: number;
-  originalCreditorId: string;
-  originalCreditorName: string;
+  sessionType: 'DRINKING';
+  amount: number; // > 0 số tiền phải trả của người nợ ở buổi đó
+  contributedAmount: number;
+  perPersonAmount: number;
 }
 
 export interface SimplifiedTransferDetail {
@@ -353,33 +481,26 @@ export interface ParseBillAIResponse {
   suggested_title: string;
 }
 
-export interface ParseVoiceAttendanceAIResponse {
-  matched_member_ids: string[];
-  new_guests: string[];
-  notes: string;
-}
-
 export interface QuickNewGuestInput {
   name: string;
   aliases?: string;
   paidImmediately?: boolean;
 }
 
-export interface CreateSessionExpenseInput {
-  category: FundLedgerCategory;
+export interface SessionItemInput {
+  member_id: string;
+  kind: SessionItemKind;
+  item_name: string;
   amount: number;
-  memberId: string;
-  description: string;
 }
 
 export interface CreateSessionPayload {
   date: string;
   type: SessionType;
-  category?: SessionType;
   title: string;
   totalAmount: number;
   guestFee?: number;
-  payerId: string;
+  payerId?: string;
   receiptDriveId?: string;
   receiptUrl?: string;
   receiptSummary?: string;
@@ -387,43 +508,36 @@ export interface CreateSessionPayload {
   attendeeIds: string[];
   paidImmediatelyMemberIds?: string[];
   new_guests?: Array<string | QuickNewGuestInput>;
-  expenses?: CreateSessionExpenseInput[];
-  expenseCategory?: FundLedgerCategory;
-  expenseDescription?: string;
+  // Chi phí cầu lông
+  courtAmount?: number;
+  shuttleQty?: number;
+  shuttleAmount?: number;
+  otherAmount?: number;
+  costDetail?: BadmintonCostDetail;
+  planId?: string;
+  // Ăn nhậu góp món
+  venueType?: DrinkingVenueType;
+  items?: SessionItemInput[];
 }
 
 export interface UpdateSessionPayload extends CreateSessionPayload {
   sessionId: string;
 }
 
-export interface ManageEditorsPayload {
-  operation: 'UPSERT' | 'TOGGLE_ACTIVE' | 'DELETE';
-  email: string;
-  name?: string;
-  role?: EditorRole;
-  isActive?: boolean;
-}
-
-export interface EditorSessionState {
-  idToken: string;
-  editor: VerifyEditorResponse;
-  exp: number;
-}
-
 export interface CreateSessionResponse {
   session: Session;
   createdMembers: Member[];
   attendances: Attendance[];
-  ledgerEntries: FundLedgerEntry[];
+  items?: SessionItem[];
 }
 
 export interface ConfirmPaymentPayload {
+  category: SessionType;
   mode?: 'SIMPLIFIED_TRANSFER' | 'ITEMS';
   fromMemberId: string;
   toMemberId: string;
   amount?: number;
   attendanceIds?: string[];
-  ledgerIds?: string[];
   method: PaymentMethod;
   transferContent?: string;
   note?: string;
@@ -431,7 +545,45 @@ export interface ConfirmPaymentPayload {
 
 export interface ConfirmPaymentResponse {
   settlement: Settlement;
-  updatedDebts: DebtsData;
+  updatedDebts: SeparatedDebtsData;
+}
+
+export interface GenerateSchedulePayload {
+  month: string; // YYYY-MM
+  weekdays: number[]; // 1=T2 .. 6=T7, 0=CN
+  startTime: string;
+  endTime: string;
+  courts: number;
+  plannedMemberIds: string[];
+  note?: string;
+}
+
+export interface UpdateScheduleDayPayload {
+  operation: 'UPSERT' | 'DELETE';
+  planId?: string;
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  courts?: number;
+  plannedMemberIds?: string[];
+  status?: ScheduleStatus;
+  note?: string;
+}
+
+export interface IssueMonthlyBillPayload {
+  month: string;
+  estimate: number;
+  memberIds: string[];
+}
+
+export interface MarkDuePaidPayload {
+  dueId: string;
+  isPaid?: boolean;
+}
+
+export interface CloseMonthPayload {
+  month: string;
+  actualCostOverride?: number | null;
 }
 
 export interface UpsertMemberPayload {
@@ -447,18 +599,20 @@ export interface UpsertMemberPayload {
   isActive?: boolean;
 }
 
-export interface AddFundEntryPayload {
-  date: string;
-  type: FundLedgerType;
-  category: FundLedgerCategory;
-  amount: number;
-  memberId: string;
-  period?: string;
-  receiptDriveId?: string;
-  receiptUrl?: string;
-  description: string;
-}
-
 export interface UpdateSettingsPayload {
   settings: Partial<Record<string, string | number>>;
+}
+
+export interface ManageEditorsPayload {
+  operation: 'UPSERT' | 'TOGGLE_ACTIVE' | 'DELETE';
+  email: string;
+  name?: string;
+  role?: EditorRole;
+  isActive?: boolean;
+}
+
+export interface EditorSessionState {
+  idToken: string;
+  editor: VerifyEditorResponse;
+  exp: number;
 }
