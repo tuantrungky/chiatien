@@ -3464,3 +3464,308 @@ function buildMembersMap_(membersList) {
   }
   return map;
 }
+
+// ============================================================================
+// HYBRID SYNC (EXPORT / IMPORT RAW TABLES - ADMIN ONLY)
+// ============================================================================
+
+function exportRawTablesRecord(authInfo) {
+  if (!authInfo || authInfo.role !== 'ADMIN') {
+    throw createAppError_('FORBIDDEN', 'Chỉ ADMIN mới được xuất toàn bộ dữ liệu thô để đồng bộ.');
+  }
+
+  beginSheetCache_();
+  try {
+    var membersRaw = getSheetObjects_('Members').map(function (r) {
+      return {
+        member_id: String(r.member_id || '').trim(),
+        name: String(r.name || '').trim(),
+        aliases: String(r.aliases || '').trim(),
+        type: String(r.type || 'MAIN').trim().toUpperCase() === 'GUEST' ? 'GUEST' : 'MAIN',
+        phone: String(r.phone || '').trim(),
+        bank_bin: String(r.bank_bin || '').trim(),
+        bank_name: String(r.bank_name || '').trim(),
+        account_no: String(r.account_no || '').trim(),
+        account_name: String(r.account_name || '').trim(),
+        email: String(r.email || '').trim().toLowerCase(),
+        is_active: toBoolean_(r.is_active),
+        created_at: String(r.created_at || ''),
+        updated_at: String(r.updated_at || '')
+      };
+    });
+
+    var sessionsRaw = getSheetObjects_('Sessions').map(function (r) {
+      return {
+        session_id: String(r.session_id || '').trim(),
+        date: String(r.date || '').trim(),
+        type: String(r.type || '').trim().toUpperCase(),
+        title: String(r.title || '').trim(),
+        total_amount: toInt_(r.total_amount, 0),
+        guest_fee: toInt_(r.guest_fee, 0),
+        payer_id: String(r.payer_id || '').trim(),
+        per_person_amount: toInt_(r.per_person_amount, 0),
+        attendee_count: toInt_(r.attendee_count, 0),
+        receipt_drive_id: String(r.receipt_drive_id || '').trim(),
+        receipt_url: String(r.receipt_url || '').trim(),
+        receipt_summary: String(r.receipt_summary || '').trim(),
+        note: String(r.note || '').trim(),
+        court_amount: toInt_(r.court_amount, 0),
+        shuttle_qty: toInt_(r.shuttle_qty, 0),
+        shuttle_amount: toInt_(r.shuttle_amount, 0),
+        other_amount: toInt_(r.other_amount, 0),
+        cost_detail: String(r.cost_detail || ''),
+        venue_type: String(r.venue_type || '').trim(),
+        plan_id: String(r.plan_id || '').trim(),
+        billing_mode: String(r.billing_mode || '').trim().toUpperCase(),
+        created_by: String(r.created_by || '').trim(),
+        created_at: String(r.created_at || ''),
+        updated_at: String(r.updated_at || '')
+      };
+    });
+
+    var attendanceRaw = getSheetObjects_('Attendance').map(function (r) {
+      return {
+        attendance_id: String(r.attendance_id || '').trim(),
+        session_id: String(r.session_id || '').trim(),
+        session_date: String(r.session_date || '').trim(),
+        session_type: String(r.session_type || '').trim().toUpperCase(),
+        member_id: String(r.member_id || '').trim(),
+        member_type_snapshot: String(r.member_type_snapshot || 'MAIN').trim().toUpperCase(),
+        fee_amount: toInt_(r.fee_amount, 0),
+        creditor_id: String(r.creditor_id || '').trim(),
+        contributed_amount: toInt_(r.contributed_amount, 0),
+        net_amount: toInt_(r.net_amount, 0),
+        is_paid: toBoolean_(r.is_paid),
+        paid_at: String(r.paid_at || ''),
+        settlement_id: String(r.settlement_id || '').trim(),
+        note: String(r.note || '').trim()
+      };
+    });
+
+    var sessionItemsRaw = getSheetObjects_('Session_Items').map(function (r) {
+      return {
+        item_id: String(r.item_id || '').trim(),
+        session_id: String(r.session_id || '').trim(),
+        member_id: String(r.member_id || '').trim(),
+        kind: String(r.kind || 'ITEM').trim().toUpperCase(),
+        item_name: String(r.item_name || '').trim(),
+        amount: toInt_(r.amount, 0)
+      };
+    });
+
+    var scheduleRaw = getSheetObjects_('Schedule').map(function (r) {
+      return {
+        plan_id: String(r.plan_id || '').trim(),
+        date: String(r.date || '').trim(),
+        start_time: String(r.start_time || '20:00').trim(),
+        end_time: String(r.end_time || '21:30').trim(),
+        courts: toInt_(r.courts, 2),
+        planned_member_ids: String(r.planned_member_ids || '').trim(),
+        status: String(r.status || 'PLANNED').trim().toUpperCase(),
+        session_id: String(r.session_id || '').trim(),
+        note: String(r.note || '').trim(),
+        created_at: String(r.created_at || ''),
+        updated_at: String(r.updated_at || '')
+      };
+    });
+
+    var monthlyBillsRaw = getSheetObjects_('Monthly_Bills').map(function (r) {
+      var hasOverride = r.actual_cost_override !== '' && r.actual_cost_override !== null && r.actual_cost_override !== undefined;
+      return {
+        month: String(r.month || '').trim(),
+        estimate: toInt_(r.estimate, 0),
+        carry_in: toInt_(r.carry_in, 0),
+        to_collect: toInt_(r.to_collect, 0),
+        member_count: toInt_(r.member_count, 0),
+        per_member: toInt_(r.per_member, 0),
+        billed_total: toInt_(r.billed_total, 0),
+        actual_cost: toInt_(r.actual_cost, 0),
+        actual_cost_override: hasOverride ? toInt_(r.actual_cost_override, 0) : null,
+        guest_income: toInt_(r.guest_income, 0),
+        carry_out: toInt_(r.carry_out, 0),
+        status: String(r.status || 'OPEN').trim().toUpperCase(),
+        created_by: String(r.created_by || '').trim(),
+        closed_at: String(r.closed_at || ''),
+        updated_at: String(r.updated_at || ''),
+        court_fee: toInt_(r.court_fee, 0),
+        shuttle_tube_qty: toFloat_(r.shuttle_tube_qty, 0),
+        shuttle_tube_price: toInt_(r.shuttle_tube_price, 0),
+        shuttle_tube_amount: toInt_(r.shuttle_tube_amount, 0),
+        prev_overtime_fee: toInt_(r.prev_overtime_fee, 0),
+        bill_detail: String(r.bill_detail || ''),
+        shuttle_contributions: String(r.shuttle_contributions || ''),
+        applied_credits_total: toInt_(r.applied_credits_total, 0),
+        carry_over_credits: String(r.carry_over_credits || '')
+      };
+    });
+
+    var monthlyDuesRaw = getSheetObjects_('Monthly_Dues').map(function (r) {
+      var amt = toInt_(r.amount, 0);
+      return {
+        due_id: String(r.due_id || '').trim(),
+        month: String(r.month || '').trim(),
+        member_id: String(r.member_id || '').trim(),
+        amount: amt,
+        base_amount: toInt_(r.base_amount, amt),
+        credit_amount: toInt_(r.credit_amount, 0),
+        credit_note: String(r.credit_note || '').trim(),
+        is_paid: toBoolean_(r.is_paid),
+        paid_at: String(r.paid_at || ''),
+        confirmed_by: String(r.confirmed_by || '').trim()
+      };
+    });
+
+    var settlementsRaw = getSheetObjects_('Settlements').map(function (r) {
+      return {
+        settlement_id: String(r.settlement_id || '').trim(),
+        from_member_id: String(r.from_member_id || '').trim(),
+        to_member_id: String(r.to_member_id || '').trim(),
+        amount: toInt_(r.amount, 0),
+        settled_at: String(r.settled_at || ''),
+        method: String(r.method || 'VIETQR').trim().toUpperCase(),
+        category: String(r.category || 'DRINKING').trim().toUpperCase(),
+        source_attendance_ids: String(r.source_attendance_ids || '').trim(),
+        source_ledger_ids: String(r.source_ledger_ids || '').trim(),
+        is_reconciled: toBoolean_(r.is_reconciled),
+        transfer_content: String(r.transfer_content || '').trim(),
+        note: String(r.note || '').trim(),
+        confirmed_by: String(r.confirmed_by || '').trim()
+      };
+    });
+
+    var fundLedgerRaw = getSheetObjects_('Fund_Ledger').map(function (r) {
+      return {
+        ledger_id: String(r.ledger_id || '').trim(),
+        date: String(r.date || '').trim(),
+        type: String(r.type || '').trim(),
+        category: String(r.category || '').trim(),
+        amount: toInt_(r.amount, 0),
+        member_id: String(r.member_id || '').trim(),
+        session_id: String(r.session_id || '').trim(),
+        attendance_id: String(r.attendance_id || '').trim(),
+        period: String(r.period || '').trim(),
+        is_paid: toBoolean_(r.is_paid),
+        paid_at: String(r.paid_at || ''),
+        settlement_id: String(r.settlement_id || '').trim(),
+        receipt_drive_id: String(r.receipt_drive_id || '').trim(),
+        receipt_url: String(r.receipt_url || '').trim(),
+        description: String(r.description || '').trim(),
+        created_by: String(r.created_by || '').trim(),
+        created_at: String(r.created_at || '')
+      };
+    });
+
+    var settingsRaw = getSheetObjects_('Settings').map(function (r) {
+      return {
+        key: String(r.key || '').trim(),
+        value: String(r.value !== undefined && r.value !== null ? r.value : ''),
+        description: String(r.description || '').trim(),
+        updated_at: String(r.updated_at || ''),
+        updated_by: String(r.updated_by || '').trim()
+      };
+    });
+
+    var editorsRaw = getEditorsList();
+
+    return {
+      tables: {
+        members: membersRaw,
+        sessions: sessionsRaw,
+        attendance: attendanceRaw,
+        session_items: sessionItemsRaw,
+        schedule: scheduleRaw,
+        monthly_bills: monthlyBillsRaw,
+        monthly_dues: monthlyDuesRaw,
+        settlements: settlementsRaw,
+        fund_ledger: fundLedgerRaw,
+        settings: settingsRaw,
+        editors: editorsRaw
+      },
+      exportedAt: nowIso_()
+    };
+  } finally {
+    endSheetCache_();
+  }
+}
+
+function replaceSheetWithObjects_(sheetName, objects) {
+  var sheet = getRequiredSheet_(sheetName);
+  var headers = getSheetHeaders_(sheet, sheetName);
+  var lastRow = sheet.getLastRow();
+  var lastCol = Math.max(sheet.getLastColumn(), headers.length);
+
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+  }
+
+  if (!objects || objects.length === 0) {
+    invalidateSheetCache_(sheetName);
+    return 0;
+  }
+
+  var rows = [];
+  for (var i = 0; i < objects.length; i++) {
+    var obj = objects[i] || {};
+    var row = [];
+    for (var c = 0; c < headers.length; c++) {
+      var h = headers[c];
+      var val = obj[h] !== undefined && obj[h] !== null ? obj[h] : '';
+      row.push(val);
+    }
+    rows.push(row);
+  }
+
+  for (var col = 0; col < headers.length; col++) {
+    if (TEXT_COLUMNS[headers[col]]) {
+      sheet.getRange(2, col + 1, rows.length, 1).setNumberFormat('@');
+    }
+  }
+  sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  invalidateSheetCache_(sheetName);
+  return rows.length;
+}
+
+function importRawTablesRecord(payload, authInfo) {
+  if (!authInfo || authInfo.role !== 'ADMIN') {
+    throw createAppError_('FORBIDDEN', 'Chỉ ADMIN mới được ghi đè dữ liệu từ Firebase sang Google Sheet.');
+  }
+
+  var p = payload || {};
+  var tables = p.tables;
+  if (!tables || typeof tables !== 'object') {
+    throw createAppError_('BAD_REQUEST', 'Thiếu object tables trong payload importRawTables.');
+  }
+
+  if (!Array.isArray(tables.editors) || tables.editors.length === 0) {
+    throw createAppError_('BAD_REQUEST', 'Từ chối đồng bộ vì danh sách Editors trống (tránh tự khóa quyền ADMIN).');
+  }
+
+  // Đảm bảo đủ 11 tabs và cột mới nhất trước khi ghi
+  setupDatabase();
+
+  var mapping = [
+    ['Members', tables.members || []],
+    ['Sessions', tables.sessions || []],
+    ['Attendance', tables.attendance || []],
+    ['Session_Items', tables.session_items || []],
+    ['Schedule', tables.schedule || []],
+    ['Monthly_Bills', tables.monthly_bills || []],
+    ['Monthly_Dues', tables.monthly_dues || []],
+    ['Settlements', tables.settlements || []],
+    ['Fund_Ledger', tables.fund_ledger || []],
+    ['Settings', tables.settings || []],
+    ['Editors', tables.editors || []]
+  ];
+
+  var importedCounts = {};
+  for (var i = 0; i < mapping.length; i++) {
+    var tabName = mapping[i][0];
+    var rows = mapping[i][1];
+    importedCounts[tabName] = replaceSheetWithObjects_(tabName, rows);
+  }
+
+  return {
+    importedCounts: importedCounts,
+    importedAt: nowIso_()
+  };
+}

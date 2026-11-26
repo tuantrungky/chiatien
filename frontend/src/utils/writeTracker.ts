@@ -1,28 +1,59 @@
 /**
  * writeTracker.ts
- * Theo dõi các thao tác đang ghi dữ liệu lên Google Sheet (qua GAS POST)
+ * Theo dõi các thao tác đang ghi dữ liệu lên Database (Firebase / Google Sheet / Mock)
  * và quá trình đồng bộ lại dữ liệu ngay sau khi ghi để hiển thị Global Saving Overlay,
  * ngăn người dùng bấm trùng hoặc thoát trang giữa chừng.
  */
 
-export const WRITE_ACTION_LABELS: Record<string, string> = {
-  createSession: 'Đang lưu buổi chơi lên Google Sheet...',
-  updateSession: 'Đang cập nhật buổi chơi lên Google Sheet...',
-  deleteSession: 'Đang xóa buổi chơi khỏi Google Sheet...',
-  confirmPayment: 'Đang xác nhận thanh toán lên Google Sheet...',
-  undoSettlement: 'Đang hoàn tác gạch nợ trên Google Sheet...',
-  generateSchedule: 'Đang tạo lịch tháng lên Google Sheet...',
-  updateScheduleDay: 'Đang cập nhật lịch ngày lên Google Sheet...',
-  issueMonthlyBill: 'Đang phát hành hóa đơn tháng lên Google Sheet...',
-  saveMonthlyContributions: 'Đang lưu danh sách góp cầu lên Google Sheet...',
-  markDuePaid: 'Đang gạch nợ tiền cầu tháng lên Google Sheet...',
-  closeMonth: 'Đang chốt hóa đơn tháng lên Google Sheet...',
-  upsertMember: 'Đang lưu thông tin thành viên lên Google Sheet...',
-  updateSettings: 'Đang lưu cài đặt CLB lên Google Sheet...',
-  manageEditors: 'Đang cập nhật quyền Editor lên Google Sheet...',
+import { getActiveProviderMode } from '../services/providerRegistry';
+
+function getTargetDbLabel(): string {
+  const mode = getActiveProviderMode();
+  if (mode === 'firebase') return 'Firebase';
+  if (mode === 'gas') return 'Google Sheet';
+  return 'Mock Demo';
+}
+
+const ACTION_VERBS: Record<string, string> = {
+  createSession: 'Đang lưu buổi chơi lên',
+  updateSession: 'Đang cập nhật buổi chơi lên',
+  deleteSession: 'Đang xóa buổi chơi khỏi',
+  confirmPayment: 'Đang xác nhận thanh toán lên',
+  undoSettlement: 'Đang hoàn tác gạch nợ trên',
+  generateSchedule: 'Đang tạo lịch tháng lên',
+  updateScheduleDay: 'Đang cập nhật lịch ngày lên',
+  issueMonthlyBill: 'Đang phát hành hóa đơn tháng lên',
+  saveMonthlyContributions: 'Đang lưu danh sách góp cầu lên',
+  markDuePaid: 'Đang gạch nợ tiền cầu tháng lên',
+  closeMonth: 'Đang chốt hóa đơn tháng lên',
+  upsertMember: 'Đang lưu thông tin thành viên lên',
+  updateSettings: 'Đang lưu cài đặt CLB lên',
+  manageEditors: 'Đang cập nhật quyền Editor lên',
+};
+
+const FIXED_ACTION_LABELS: Record<string, string> = {
   linkMemberEmail: 'Đang liên kết tài khoản thành viên...',
   parseBillAI: 'Đang tải ảnh lên Drive & quét hóa đơn AI...',
+  pullSheetToFirebase: 'Đang kéo dữ liệu từ Google Sheet sang Firebase...',
+  pushFirebaseToSheet: 'Đang sao lưu dữ liệu từ Firebase sang Google Sheet...',
 };
+
+export const WRITE_ACTION_LABELS: Record<string, string> = {
+  ...Object.fromEntries(
+    Object.keys(ACTION_VERBS).map((k) => [k, `${ACTION_VERBS[k]} hệ thống...`])
+  ),
+  ...FIXED_ACTION_LABELS,
+};
+
+function resolveActionMessage(actionOrMessage: string): string {
+  if (FIXED_ACTION_LABELS[actionOrMessage]) {
+    return FIXED_ACTION_LABELS[actionOrMessage];
+  }
+  if (ACTION_VERBS[actionOrMessage]) {
+    return `${ACTION_VERBS[actionOrMessage]} ${getTargetDbLabel()}...`;
+  }
+  return actionOrMessage || `Đang lưu dữ liệu lên ${getTargetDbLabel()}...`;
+}
 
 export interface WriteActivitySnapshot {
   activeCount: number;
@@ -60,10 +91,7 @@ function updateSnapshotAndNotify(): void {
 
 export function beginWrite(actionOrMessage: string): () => void {
   const id = nextWriteId++;
-  const message =
-    WRITE_ACTION_LABELS[actionOrMessage] ||
-    actionOrMessage ||
-    'Đang lưu dữ liệu lên Google Sheet...';
+  const message = resolveActionMessage(actionOrMessage);
   activeWrites = [...activeWrites, { id, message }];
   updateSnapshotAndNotify();
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchAllData } from '../services/api';
+import { fetchAllData, subscribeClubChanges } from '../services/api';
+import { getActiveProviderMode, subscribeProviderMode } from '../services/providerRegistry';
 import type {
   AllDataResponse,
   BootstrapData,
@@ -16,15 +17,20 @@ import { getTodayDateStr } from '../utils/dateFilters';
 import { simplifyDebts } from '../utils/debtSimplifier';
 import { trackWrite, wasWriteJustFinished } from '../utils/writeTracker';
 
-const SWR_PREFIX = 'cln_swr_v5';
+const SWR_PREFIX = 'cln_swr_v6';
 
 interface SwrCachePayload {
   data: AllDataResponse;
   lastUpdatedAt: number;
 }
 
-function getCacheKey(periodType: PeriodType, refDate: string, activeMonth: string): string {
-  return `${SWR_PREFIX}_${activeMonth}_${periodType}_${refDate}`;
+function getCacheKey(
+  providerMode: string,
+  periodType: PeriodType,
+  refDate: string,
+  activeMonth: string
+): string {
+  return `${SWR_PREFIX}_${providerMode}_${activeMonth}_${periodType}_${refDate}`;
 }
 
 function readSwrCache(key: string): SwrCachePayload | null {
@@ -70,12 +76,20 @@ export interface UseClubDataResult {
 }
 
 export function useClubData(): UseClubDataResult {
+  const [providerMode, setProviderMode] = useState(() => getActiveProviderMode());
   const [periodType, setPeriodType] = useState<PeriodType>('MONTH');
   const [refDate, setRefDate] = useState<string>(() => getTodayDateStr());
   const [activeMonth, setActiveMonth] = useState<string>(() => getTodayDateStr().slice(0, 7));
 
   const initialCache = useRef<SwrCachePayload | null>(
-    readSwrCache(getCacheKey('MONTH', getTodayDateStr(), getTodayDateStr().slice(0, 7)))
+    readSwrCache(
+      getCacheKey(
+        getActiveProviderMode(),
+        'MONTH',
+        getTodayDateStr(),
+        getTodayDateStr().slice(0, 7)
+      )
+    )
   );
 
   const [allData, setAllData] = useState<AllDataResponse | null>(
@@ -88,9 +102,15 @@ export function useClubData(): UseClubDataResult {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    return subscribeProviderMode((nextMode) => {
+      setProviderMode(nextMode);
+    });
+  }, []);
+
   const loadAll = useCallback(
     async (showSkeleton: boolean): Promise<boolean> => {
-      const cacheKey = getCacheKey(periodType, refDate, activeMonth);
+      const cacheKey = getCacheKey(providerMode, periodType, refDate, activeMonth);
       const cached = readSwrCache(cacheKey);
       if (cached && showSkeleton) {
         setAllData(cached.data);
@@ -124,12 +144,29 @@ export function useClubData(): UseClubDataResult {
         setRefreshing(false);
       }
     },
-    [periodType, refDate, activeMonth]
+    [providerMode, periodType, refDate, activeMonth]
   );
 
   useEffect(() => {
     void loadAll(allData === null);
   }, [loadAll]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Real-time sync qua _meta/sync_state khi đang dùng Firebase
+  useEffect(() => {
+    if (providerMode !== 'firebase') return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = subscribeClubChanges(() => {
+      if (wasWriteJustFinished(1200)) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        void loadAll(false);
+      }, 350);
+    });
+    return () => {
+      unsub();
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
+  }, [providerMode, loadAll]);
 
   const refreshAll = useCallback(async (): Promise<boolean> => {
     return loadAll(false);

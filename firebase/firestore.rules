@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function editorPath() {
+      return /databases/$(database)/documents/editors/$(userEmail());
+    }
+
+    function isEditor() {
+      return isSignedIn()
+        && exists(editorPath())
+        && get(editorPath()).data.is_active == true
+        && (get(editorPath()).data.role == 'ADMIN' || get(editorPath()).data.role == 'EDITOR');
+    }
+
+    function isAdmin() {
+      return isEditor() && get(editorPath()).data.role == 'ADMIN';
+    }
+
+    // Dữ liệu CLB công khai cho Viewer (giống GAS doGet hiện tại)
+    match /sessions/{id} { allow read: if true; allow write: if isEditor(); }
+    match /attendance/{id} { allow read: if true; allow write: if isEditor(); }
+    match /session_items/{id} { allow read: if true; allow write: if isEditor(); }
+    match /schedule/{id} { allow read: if true; allow write: if isEditor(); }
+    match /monthly_bills/{id} { allow read: if true; allow write: if isEditor(); }
+    match /monthly_dues/{id} { allow read: if true; allow write: if isEditor(); }
+    match /settlements/{id} { allow read: if true; allow write: if isEditor(); }
+    match /settings/{id} { allow read: if true; allow write: if isEditor(); }
+    match /fund_ledger/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /_meta/{id} { allow read: if true; allow write: if isEditor(); }
+
+    // Viewer đọc công khai; Editor sửa toàn bộ; Member thường chỉ tự link/unlink email của chính mình
+    match /members/{memberId} {
+      allow read: if true;
+      allow create, delete: if isEditor();
+      allow update: if isEditor() || (
+        isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'updated_at'])
+        && (
+          ((resource.data.email == '' || resource.data.email == null) && request.resource.data.email == userEmail())
+          || (resource.data.email == userEmail() && request.resource.data.email == '')
+        )
+      );
+    }
+
+    // Bảo vệ danh sách editors: user thường chỉ get được doc của chính email mình
+    match /editors/{email} {
+      allow get: if isSignedIn() && (userEmail() == email || isEditor());
+      allow list: if isEditor();
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -287,6 +287,14 @@ function doPost(e) {
           result = manageEditorsRecord(payload, auth);
           break;
 
+        case 'exportRawTables':
+          result = exportRawTablesRecord(auth);
+          break;
+
+        case 'importRawTables':
+          result = importRawTablesRecord(payload, auth);
+          break;
+
         default:
           return jsonError_('BAD_REQUEST', 'Action POST không được hỗ trợ: ' + action);
       }

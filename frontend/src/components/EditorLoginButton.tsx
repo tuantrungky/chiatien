@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertCircle, KeyRound, Loader2, LogIn, LogOut, ShieldCheck, UserCheck, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { IS_MOCK_MODE } from '../services/api';
+import { isMockMode } from '../services/api';
 
 declare global {
   interface Window {
@@ -33,12 +33,21 @@ declare global {
 
 export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void }) {
   const btnRef = useRef<HTMLDivElement | null>(null);
-  const { loginWithIdToken, loginMockEditor, loginMockMember, authLoading, authError } = useAuth();
+  const {
+    usesFirebaseAuth,
+    loginWithIdToken,
+    loginWithFirebase,
+    loginMockEditor,
+    loginMockMember,
+    authLoading,
+    authError,
+  } = useAuth();
+  const mockActive = isMockMode();
   const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
   const hasRealClientId = Boolean(clientId && !clientId.includes('YOUR_GOOGLE_CLIENT_ID'));
 
   useEffect(() => {
-    if (!hasRealClientId || !btnRef.current) return;
+    if (usesFirebaseAuth || mockActive || !hasRealClientId || !btnRef.current) return;
 
     let cancelled = false;
     const tryInit = () => {
@@ -79,7 +88,7 @@ export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void })
     return () => {
       cancelled = true;
     };
-  }, [clientId, hasRealClientId, loginWithIdToken, onSuccess]);
+  }, [clientId, hasRealClientId, loginWithIdToken, onSuccess, usesFirebaseAuth, mockActive]);
 
   return (
     <div className="space-y-3">
@@ -93,19 +102,50 @@ export function GoogleSignInButtonBox({ onSuccess }: { onSuccess?: () => void })
       {authLoading ? (
         <div className="py-3 flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-          <span>Đang xác thực quyền Editor...</span>
+          <span>Đang xác thực tài khoản...</span>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2.5">
-          {hasRealClientId ? (
-            <div ref={btnRef} className="min-h-[44px] flex items-center justify-center" />
-          ) : (
-            <p className="text-xs text-slate-500 text-center">
-              Chưa cấu hình <code className="bg-slate-100 px-1 rounded">VITE_GOOGLE_CLIENT_ID</code>.
-            </p>
-          )}
+          {usesFirebaseAuth && !mockActive ? (
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await loginWithFirebase();
+                if (ok && onSuccess) onSuccess();
+              }}
+              className="w-full inline-flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs sm:text-sm font-semibold shadow-xs transition cursor-pointer"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.3 0 6.08-1.09 8.105-2.96l-3.88-3.05c-1.08.73-2.46 1.16-4.225 1.16-3.25 0-6-2.19-6.98-5.14H1.01v3.14C3.02 21.14 7.19 24 12 24Z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.02 14.01c-.25-.73-.39-1.51-.39-2.31s.14-1.58.39-2.31V6.25H1.01C.37 7.53 0 8.97 0 11.7s.37 4.17 1.01 5.45l4.01-3.14Z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.55c1.8 0 3.41.62 4.68 1.83l3.51-3.51C18.07 1.09 15.3 0 12 0 7.19 0 3.02 2.86 1.01 6.25l4.01 3.14C6 6.74 8.75 4.55 12 4.55Z"
+                />
+              </svg>
+              <span>Đăng nhập bằng Google</span>
+            </button>
+          ) : !mockActive ? (
+            hasRealClientId ? (
+              <div ref={btnRef} className="min-h-[44px] flex items-center justify-center" />
+            ) : (
+              <p className="text-xs text-slate-500 text-center">
+                Chưa cấu hình <code className="bg-slate-100 px-1 rounded">VITE_GOOGLE_CLIENT_ID</code> hoặc Firebase Auth.
+              </p>
+            )
+          ) : null}
 
-          {IS_MOCK_MODE && (
+          {mockActive && (
             <div className="w-full space-y-2">
               <button
                 type="button"

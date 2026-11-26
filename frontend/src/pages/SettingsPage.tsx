@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle,
+  ArrowDownToLine,
   ArrowUpCircle,
+  ArrowUpFromLine,
   Check,
+  Database,
   Edit3,
   EyeOff,
   Loader2,
   Plus,
+  RefreshCw,
   Save,
   Settings as SettingsIcon,
   Shield,
@@ -21,7 +25,20 @@ import {
   manageEditors,
   updateSettings,
   upsertMember,
+  type DbProviderMode,
 } from '../services/api';
+import {
+  getActiveProviderDisplayName,
+  getProviderCapabilities,
+  setLocalProviderOverride,
+  subscribeProviderMode,
+} from '../services/providerRegistry';
+import type { SyncMetaState, TableCountComparison } from '../services/providers/types';
+import {
+  compareFirebaseAndSheet,
+  pullSheetToFirebase,
+  pushFirebaseToSheet,
+} from '../services/sync/manualSync';
 import type { Editor, EditorRole, Member, SettingsMap } from '../types';
 import { VIETQR_BANKS } from '../utils/banks';
 
@@ -32,12 +49,26 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ members, settings, onRefreshAll }: SettingsPageProps) {
-  const { idToken, editor, isAdmin, handleApiError } = useAuth();
+  const { idToken, editor, isAdmin, getFreshIdToken, handleApiError } = useAuth();
   const toast = useToast();
-  const [subTab, setSubTab] = useState<'MEMBERS' | 'SETTINGS' | 'EDITORS'>('MEMBERS');
+  const [subTab, setSubTab] = useState<'MEMBERS' | 'SETTINGS' | 'EDITORS' | 'DATABASE'>('MEMBERS');
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Database & Sync state (ADMIN)
+  const [capabilities, setCapabilities] = useState(() => getProviderCapabilities());
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncProgressText, setSyncProgressText] = useState<string | null>(null);
+  const [syncMeta, setSyncMeta] = useState<SyncMetaState | null>(null);
+  const [sheetExportedAt, setSheetExportedAt] = useState<string>('');
+  const [comparisons, setComparisons] = useState<TableCountComparison[]>([]);
+
+  useEffect(() => {
+    return subscribeProviderMode(() => {
+      setCapabilities(getProviderCapabilities());
+    });
+  }, []);
 
   // Member form state
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
@@ -301,13 +332,111 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     }
   };
 
+  const handleSwitchProvider = async (nextOverride: DbProviderMode | null) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    const active = setLocalProviderOverride(nextOverride);
+    setCapabilities(getProviderCapabilities());
+    toast.info(`Đã chuyển nguồn dữ liệu sang ${getActiveProviderDisplayName(active)}.`);
+    await onRefreshAll();
+  };
+
+  const handleCompareDatabases = async () => {
+    if (!isAdmin || syncLoading) return;
+    const token = (await getFreshIdToken()) || idToken;
+    if (!token) {
+      toast.error('Vui lòng đăng nhập lại bằng tài khoản Google ADMIN.');
+      return;
+    }
+    setSyncLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setSyncProgressText('Đang đọc số lượng bản ghi từ Firebase & Google Sheets...');
+    try {
+      const res = await compareFirebaseAndSheet(token);
+      setComparisons(res.comparisons);
+      setSyncMeta(res.meta);
+      setSheetExportedAt(res.sheetExportedAt);
+      toast.success('Đã đối chiếu xong dữ liệu giữa Firebase và Google Sheets.');
+    } catch (err) {
+      setErrorMsg(handleApiError(err));
+    } finally {
+      setSyncLoading(false);
+      setSyncProgressText(null);
+    }
+  };
+
+  const handlePullSheetToFirebase = async () => {
+    if (!isAdmin || syncLoading) return;
+    if (
+      !window.confirm(
+        'Xác nhận KÉO dữ liệu từ Google Sheets sang Firebase?\n\nDữ liệu hiện tại trên Firestore sẽ được cập nhật khớp hoàn toàn với 11 tab trên Google Sheets.'
+      )
+    ) {
+      return;
+    }
+    const token = (await getFreshIdToken()) || idToken;
+    if (!token || !editor?.email) return;
+    setSyncLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await pullSheetToFirebase(token, editor.email, (msg) => {
+        setSyncProgressText(msg);
+      });
+      const totalRows = Object.values(res.counts).reduce((s, n) => s + n, 0);
+      setSuccessMsg(`Đã kéo thành công ${totalRows} bản ghi từ Google Sheets sang Cloud Firestore.`);
+      toast.success('Kéo dữ liệu Sheet → Firebase thành công!');
+      await onRefreshAll();
+      await handleCompareDatabases();
+    } catch (err) {
+      setErrorMsg(handleApiError(err));
+    } finally {
+      setSyncLoading(false);
+      setSyncProgressText(null);
+    }
+  };
+
+  const handlePushFirebaseToSheet = async () => {
+    if (!isAdmin || syncLoading) return;
+    if (
+      !window.confirm(
+        'Xác nhận SAO LƯU dữ liệu từ Firebase sang Google Sheets?\n\nNội dung 11 tab trên Google Sheets sẽ được ghi đè theo bản mới nhất trên Cloud Firestore.'
+      )
+    ) {
+      return;
+    }
+    const token = (await getFreshIdToken()) || idToken;
+    if (!token || !editor?.email) return;
+    setSyncLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await pushFirebaseToSheet(token, editor.email, (msg) => {
+        setSyncProgressText(msg);
+      });
+      const totalRows = Object.values(res.importedCounts).reduce((s, n) => s + n, 0);
+      setSuccessMsg(`Đã sao lưu thành công ${totalRows} bản ghi từ Firebase sang Google Sheets.`);
+      toast.success('Đẩy dữ liệu Firebase → Sheet thành công!');
+      await handleCompareDatabases();
+    } catch (err) {
+      setErrorMsg(handleApiError(err));
+    } finally {
+      setSyncLoading(false);
+      setSyncProgressText(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-1 rounded-2xl">
+      <div className={`grid gap-1 bg-slate-200/70 p-1 rounded-2xl ${isAdmin ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
         {[
           { id: 'MEMBERS' as const, label: 'Thành viên', icon: Users },
           { id: 'SETTINGS' as const, label: 'Đơn giá & Cài đặt', icon: SettingsIcon },
           { id: 'EDITORS' as const, label: 'Quyền Editor', icon: Shield },
+          ...(isAdmin
+            ? [{ id: 'DATABASE' as const, label: 'Database & Sync', icon: Database }]
+            : []),
         ].map((t) => {
           const Icon = t.icon;
           const active = subTab === t.id;
@@ -802,6 +931,154 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                   )}
                 </div>
               ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: DATABASE & ĐỒNG BỘ HYBRID (ADMIN) */}
+      {subTab === 'DATABASE' && isAdmin && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3 shadow-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Nguồn dữ liệu đang kết nối</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Mặc định hệ thống (.env):{' '}
+                  <span className="font-semibold text-slate-800">
+                    {getActiveProviderDisplayName(capabilities.envDefault)}
+                  </span>
+                </p>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                  capabilities.active === 'firebase'
+                    ? 'bg-sky-100 text-sky-800'
+                    : capabilities.active === 'gas'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                Đang dùng: {getActiveProviderDisplayName(capabilities.active)}
+                {capabilities.override ? ' (Tạm đổi trên máy này)' : ''}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+              {[
+                { id: null, label: 'Theo .env', enabled: true },
+                { id: 'firebase' as const, label: 'Firebase', enabled: capabilities.firebaseReady },
+                { id: 'gas' as const, label: 'Google Sheets', enabled: capabilities.gasReady },
+                { id: 'mock' as const, label: 'Mock Demo', enabled: true },
+              ].map((opt) => {
+                const isSelected = capabilities.override === opt.id;
+                return (
+                  <button
+                    key={String(opt.id)}
+                    type="button"
+                    disabled={!opt.enabled || syncLoading}
+                    onClick={() => void handleSwitchProvider(opt.id)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                    {!opt.enabled && ' (Chưa cấu hình)'}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Lưu ý: Nút chuyển kết nối chỉ áp dụng cục bộ trên trình duyệt này để đối chiếu số liệu hoặc dự phòng khẩn cấp, không ảnh hưởng thành viên khác.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3 shadow-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Đồng bộ 2 chiều Firebase ↔ Google Sheets</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Chủ động kéo dữ liệu khi migrate hoặc đẩy bản sao lưu sang Google Sheets cuối tháng.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={syncLoading || !capabilities.firebaseReady || !capabilities.gasReady}
+                onClick={() => void handleCompareDatabases()}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncLoading ? 'animate-spin' : ''}`} />
+                <span>So sánh dữ liệu</span>
+              </button>
+            </div>
+
+            {syncProgressText && (
+              <div className="rounded-xl bg-sky-50 border border-sky-200 p-3 flex items-center gap-2 text-xs font-medium text-sky-800">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>{syncProgressText}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                disabled={syncLoading || !capabilities.firebaseReady || !capabilities.gasReady}
+                onClick={() => void handlePullSheetToFirebase()}
+                className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                <ArrowDownToLine className="w-4 h-4" />
+                <span>Pull: Google Sheet → Firebase</span>
+              </button>
+              <button
+                type="button"
+                disabled={syncLoading || !capabilities.firebaseReady || !capabilities.gasReady}
+                onClick={() => void handlePushFirebaseToSheet()}
+                className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                <ArrowUpFromLine className="w-4 h-4" />
+                <span>Push: Firebase → Google Sheet</span>
+              </button>
+            </div>
+
+            {syncMeta && (
+              <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-4 gap-y-1 pt-1">
+                <span>Pull gần nhất: {syncMeta.lastPullFromSheetAt || 'Chưa có'}</span>
+                <span>Push gần nhất: {syncMeta.lastPushToSheetAt || 'Chưa có'}</span>
+                {sheetExportedAt && <span>Sheet đọc lúc: {sheetExportedAt}</span>}
+              </div>
+            )}
+
+            {comparisons.length > 0 && (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl mt-2">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-bold">Bảng dữ liệu</th>
+                      <th className="text-right px-3 py-2 font-bold">Firebase</th>
+                      <th className="text-right px-3 py-2 font-bold">Google Sheet</th>
+                      <th className="text-right px-3 py-2 font-bold">Chênh lệch</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {comparisons.map((row) => (
+                      <tr key={row.table}>
+                        <td className="px-3 py-2 font-medium text-slate-800">{row.label}</td>
+                        <td className="px-3 py-2 text-right font-mono">{row.firebaseCount}</td>
+                        <td className="px-3 py-2 text-right font-mono">{row.sheetCount}</td>
+                        <td
+                          className={`px-3 py-2 text-right font-mono font-bold ${
+                            row.diff === 0 ? 'text-emerald-600' : 'text-amber-600'
+                          }`}
+                        >
+                          {row.diff > 0 ? `+${row.diff}` : row.diff}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   ArrowRightLeft,
   CalendarDays,
@@ -13,7 +13,12 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { IS_MOCK_MODE } from '../services/api';
+import {
+  getActiveProviderMode,
+  getLocalProviderOverride,
+  subscribeProviderMode,
+} from '../services/providerRegistry';
+import type { DbProviderMode } from '../services/api';
 import type { Member } from '../types';
 import { formatTimeVN } from '../utils/dateFilters';
 import { EditorLoginButton } from './EditorLoginButton';
@@ -94,6 +99,22 @@ export function Layout({
 }: LayoutProps) {
   const { isEditor, isLoggedIn } = useAuth();
   const [fabOpen, setFabOpen] = useState(false);
+  const [providerMode, setProviderMode] = useState<DbProviderMode>(() => getActiveProviderMode());
+  const isMock = providerMode === 'mock';
+  const hasOverride = Boolean(getLocalProviderOverride());
+  const providerBadgeText =
+    providerMode === 'firebase' ? 'FIREBASE' : providerMode === 'gas' ? 'SHEET' : 'MOCK';
+  const syncStatusLabel =
+    providerMode === 'firebase'
+      ? 'Đang đồng bộ Firebase...'
+      : providerMode === 'gas'
+        ? 'Đang đồng bộ Sheet...'
+        : 'Đang đồng bộ dữ liệu...';
+
+  useEffect(() => {
+    return subscribeProviderMode((next) => setProviderMode(next));
+  }, []);
+
   const navItems = ALL_NAV_ITEMS.filter((item) => !item.editorOnly || isEditor);
 
   const handleSelectTab = (tab: ActiveTab) => {
@@ -125,11 +146,19 @@ export function Layout({
                 <ShieldCheck className="w-3 h-3 text-emerald-300" />
                 {isEditor ? 'Editor Mode' : isLoggedIn ? 'Thành viên' : 'Viewer'}
               </span>
-              {IS_MOCK_MODE && (
-                <span className="text-[10px] font-semibold text-amber-900 bg-amber-300 px-1.5 py-0.5 rounded">
-                  MOCK
-                </span>
-              )}
+              <span
+                title={hasOverride ? 'Đang chuyển nguồn cục bộ trên thiết bị này' : undefined}
+                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                  isMock
+                    ? 'text-amber-900 bg-amber-300'
+                    : providerMode === 'firebase'
+                      ? 'text-sky-950 bg-sky-300'
+                      : 'text-emerald-950 bg-emerald-300'
+                }`}
+              >
+                {providerBadgeText}
+                {hasOverride ? '*' : ''}
+              </span>
             </div>
           </div>
         </div>
@@ -221,11 +250,17 @@ export function Layout({
                   <span className="text-[10px] font-medium text-slate-500 truncate">
                     {isEditor ? 'Quản lý Editor' : 'Gà nhà đá nhau'}
                   </span>
-                  {IS_MOCK_MODE && (
-                    <span className="text-[9px] font-semibold text-amber-700 bg-amber-100 px-1 rounded">
-                      MOCK
-                    </span>
-                  )}
+                  <span
+                    className={`text-[9px] font-semibold px-1 rounded ${
+                      isMock
+                        ? 'text-amber-700 bg-amber-100'
+                        : providerMode === 'firebase'
+                          ? 'text-sky-700 bg-sky-100'
+                          : 'text-emerald-700 bg-emerald-100'
+                    }`}
+                  >
+                    {providerBadgeText}
+                  </span>
                 </div>
               </div>
             </div>
@@ -237,7 +272,7 @@ export function Layout({
                   : navItems.find((n) => n.id === activeTab)?.label}
               </h2>
               <span className="text-xs text-slate-400">
-                {refreshing ? 'Đang đồng bộ Sheet...' : formatSyncTime(lastUpdatedAt)}
+                {refreshing ? syncStatusLabel : formatSyncTime(lastUpdatedAt)}
               </span>
             </div>
 
@@ -257,8 +292,15 @@ export function Layout({
             </div>
           </div>
           <div className="md:hidden px-3 py-1 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500">
-            <span>{refreshing ? 'Đang đồng bộ dữ liệu mới nhất...' : formatSyncTime(lastUpdatedAt)}</span>
-            {IS_MOCK_MODE && <span className="font-semibold text-amber-700">Chế độ Demo (Mock)</span>}
+            <span>{refreshing ? syncStatusLabel : formatSyncTime(lastUpdatedAt)}</span>
+            {isMock ? (
+              <span className="font-semibold text-amber-700">Chế độ Demo (Mock)</span>
+            ) : (
+              <span className="font-semibold text-slate-500">
+                Nguồn: {providerMode === 'firebase' ? 'Firebase' : 'Google Sheet'}
+                {hasOverride ? ' (Tạm đổi)' : ''}
+              </span>
+            )}
           </div>
         </header>
 

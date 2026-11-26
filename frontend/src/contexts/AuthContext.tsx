@@ -1,5 +1,14 @@
+import { onIdTokenChanged } from 'firebase/auth';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ApiClientError, IS_MOCK_MODE, linkMemberEmail, verifyEditor } from '../services/api';
+import { ApiClientError, isMockMode, linkMemberEmail, verifyEditor } from '../services/api';
+import {
+  getFirebaseAuth,
+  getFreshFirebaseIdToken,
+  isFirebaseConfigured,
+  signInWithFirebaseGoogle,
+  signOutFirebase,
+} from '../services/firebase/config';
+import { getActiveProviderMode, subscribeProviderMode } from '../services/providerRegistry';
 import type { EditorSessionState, VerifyEditorResponse } from '../types';
 import { useToast } from './ToastContext';
 
@@ -14,6 +23,7 @@ interface AuthContextValue {
   isLoggedIn: boolean;
   isEditor: boolean;
   isAdmin: boolean;
+  usesFirebaseAuth: boolean;
   myMemberId: string | null;
   setMyMemberId: (memberId: string | null) => void;
   needsMemberLink: boolean;
@@ -26,8 +36,10 @@ interface AuthContextValue {
   openLoginModal: () => void;
   closeLoginModal: () => void;
   loginWithIdToken: (credential: string, silent?: boolean) => Promise<boolean>;
+  loginWithFirebase: () => Promise<boolean>;
   loginMockEditor: () => Promise<boolean>;
   loginMockMember: () => Promise<boolean>;
+  getFreshIdToken: () => Promise<string | null>;
   logout: () => void;
   handleApiError: (err: unknown) => string;
   clearAuthError: () => void;
@@ -43,7 +55,7 @@ function decodeJwtExp(token: string): number {
     const json = decodeURIComponent(
       atob(base64)
         .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .map((c) => `%${(`00${c.charCodeAt(0).toString(16)}`).slice(-2)}`)
         .join('')
     );
     const parsed = JSON.parse(json) as { exp?: number };
@@ -88,6 +100,7 @@ function readStoredMemberId(): string | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
+  const [providerMode, setProviderMode] = useState(() => getActiveProviderMode());
   const [session, setSession] = useState<EditorSessionState | null>(() => readStoredSession());
   const [myMemberId, setMyMemberIdState] = useState<string | null>(
     () => readStoredSession()?.editor?.linkedMemberId || readStoredMemberId()
@@ -99,6 +112,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const silentPromptAttempted = useRef(false);
 
+  const usesFirebaseAuth = isFirebaseConfigured() && providerMode !== 'mock';
+
+  useEffect(() => {
+    return subscribeProviderMode((nextMode) => {
+      setProviderMode(nextMode);
+    });
+  }, []);
+
   const setMyMemberId = useCallback((memberId: string | null) => {
     setMyMemberIdState(memberId);
     try {
@@ -109,42 +130,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const persistVerifiedSession = useCallback(
+    (credential: string, verified: VerifyEditorResponse, silent: boolean): boolean => {
+      if (!verified.authorized) {
+        setAuthError('Xác thực tài khoản Google thất bại.');
+        return false;
+      }
+      const exp = decodeJwtExp(credential);
+      const next: EditorSessionState = {
+        idToken: credential,
+        editor: verified,
+        exp,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(verified));
+      setSession(next);
+      setDismissedMemberLink(false);
+      if (verified.linkedMemberId) {
+        setMyMemberId(verified.linkedMemberId);
+      }
+      setLoginModalOpen(false);
+      setReauthRequired(false);
+      const verifiedIsEditor = Boolean(
+        verified.isEditor ?? (verified.role === 'ADMIN' || verified.role === 'EDITOR')
+      );
+      if (!silent) {
+        toast.success(
+          verifiedIsEditor
+            ? `Đã đăng nhập Editor (${verified.name})`
+            : `Đã đăng nhập Thành viên (${verified.name})`
+        );
+      }
+      return true;
+    },
+    [setMyMemberId, toast]
+  );
+
   const loginWithIdToken = useCallback(
     async (credential: string, silent = false): Promise<boolean> => {
       setAuthLoading(true);
       setAuthError(null);
       try {
         const verified = await verifyEditor(credential);
-        if (!verified.authorized) {
-          setAuthError('Xác thực tài khoản Google thất bại.');
-          return false;
-        }
-        const exp = decodeJwtExp(credential);
-        const next: EditorSessionState = {
-          idToken: credential,
-          editor: verified,
-          exp,
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-        localStorage.setItem(PROFILE_KEY, JSON.stringify(verified));
-        setSession(next);
-        setDismissedMemberLink(false);
-        if (verified.linkedMemberId) {
-          setMyMemberId(verified.linkedMemberId);
-        }
-        setLoginModalOpen(false);
-        setReauthRequired(false);
-        const verifiedIsEditor = Boolean(
-          verified.isEditor ?? (verified.role === 'ADMIN' || verified.role === 'EDITOR')
-        );
-        if (!silent) {
-          toast.success(
-            verifiedIsEditor
-              ? `Đã đăng nhập Editor (${verified.name})`
-              : `Đã đăng nhập Thành viên (${verified.name})`
-          );
-        }
-        return true;
+        return persistVerifiedSession(credential, verified, silent);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Xác thực tài khoản thất bại.';
         setAuthError(msg);
@@ -154,12 +182,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       }
     },
-    [toast, setMyMemberId]
+    [persistVerifiedSession, toast]
   );
 
-  // Thử làm mới token im lặng qua Google One Tap auto_select khi hồ sơ Editor còn lưu trong localStorage
+  const loginWithFirebase = useCallback(async (): Promise<boolean> => {
+    if (!isFirebaseConfigured()) {
+      setAuthError('Chưa cấu hình biến môi trường Firebase.');
+      return false;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const { idToken } = await signInWithFirebaseGoogle();
+      const verified = await verifyEditor(idToken);
+      return persistVerifiedSession(idToken, verified, false);
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : 'Đăng nhập Firebase Google thất bại.';
+      const msg = rawMsg.includes('popup-closed-by-user')
+        ? 'Bạn đã đóng cửa sổ đăng nhập Google.'
+        : rawMsg;
+      setAuthError(msg);
+      toast.error(msg);
+      return false;
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [persistVerifiedSession, toast]);
+
+  // Theo dõi phiên Firebase Auth: tự khôi phục & tự làm mới token vĩnh viễn (không hết hạn 1 giờ)
+  useEffect(() => {
+    if (!usesFirebaseAuth) return;
+    const auth = getFirebaseAuth();
+    const unsub = onIdTokenChanged(auth, async (user) => {
+      if (!user) return;
+      try {
+        const freshToken = await user.getIdToken();
+        const verified = await verifyEditor(freshToken);
+        persistVerifiedSession(freshToken, verified, true);
+      } catch {
+        // Giữ nguyên state hiện tại nếu tạm mất mạng
+      }
+    });
+    return () => unsub();
+  }, [usesFirebaseAuth, providerMode, persistVerifiedSession]);
+
+  // Thử làm mới token im lặng qua Google One Tap auto_select khi dùng GIS thuần (chưa bật Firebase)
   const attemptSilentGoogleRefresh = useCallback(
     (showReauthOnSkip: boolean) => {
+      if (usesFirebaseAuth) {
+        void getFreshFirebaseIdToken(true).then(async (freshToken) => {
+          if (freshToken) {
+            await loginWithIdToken(freshToken, true);
+          } else if (showReauthOnSkip) {
+            setReauthRequired(true);
+          }
+        });
+        return;
+      }
+
       const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
       const gsi = window.google?.accounts?.id;
       if (!clientId || clientId.includes('YOUR_GOOGLE_CLIENT_ID') || !gsi) {
@@ -191,60 +271,79 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (showReauthOnSkip) setReauthRequired(true);
       }
     },
-    [loginWithIdToken]
+    [loginWithIdToken, usesFirebaseAuth]
   );
 
-  // Khi mở lại app sau > 1h mà đã từng đăng nhập Editor -> thử One Tap tự động
+  // Khi mở lại app sau > 1h mà đã từng đăng nhập Editor -> thử One Tap tự động (chế độ GIS thuần)
   useEffect(() => {
+    if (usesFirebaseAuth) return;
     if (session || silentPromptAttempted.current || !hasSavedProfile()) return;
     silentPromptAttempted.current = true;
-    if (IS_MOCK_MODE) return;
+    if (isMockMode()) return;
 
     const timer = setTimeout(() => {
       attemptSilentGoogleRefresh(false);
     }, 600);
     return () => clearTimeout(timer);
-  }, [session, attemptSilentGoogleRefresh]);
+  }, [session, attemptSilentGoogleRefresh, usesFirebaseAuth]);
 
   // Hết hạn token trong lúc đang mở app -> tự làm mới im lặng hoặc hiện ReauthModal
   useEffect(() => {
     if (!session) return;
     const msLeft = session.exp - Date.now();
     if (msLeft <= 0) {
+      if (usesFirebaseAuth) {
+        attemptSilentGoogleRefresh(true);
+        return;
+      }
       localStorage.removeItem(STORAGE_KEY);
       setSession(null);
       attemptSilentGoogleRefresh(true);
       return;
     }
     const timer = setTimeout(() => {
+      if (usesFirebaseAuth) {
+        attemptSilentGoogleRefresh(true);
+        return;
+      }
       localStorage.removeItem(STORAGE_KEY);
       setSession(null);
       attemptSilentGoogleRefresh(true);
     }, msLeft);
     return () => clearTimeout(timer);
-  }, [session, attemptSilentGoogleRefresh]);
+  }, [session, attemptSilentGoogleRefresh, usesFirebaseAuth]);
 
   const loginMockEditor = useCallback(async (): Promise<boolean> => {
-    if (!IS_MOCK_MODE) return false;
+    if (!isMockMode()) return false;
     return loginWithIdToken('MOCK_ADMIN_ID_TOKEN');
   }, [loginWithIdToken]);
 
   const loginMockMember = useCallback(async (): Promise<boolean> => {
-    if (!IS_MOCK_MODE) return false;
+    if (!isMockMode()) return false;
     return loginWithIdToken('MOCK_MEMBER_ID_TOKEN');
   }, [loginWithIdToken]);
 
+  const getFreshIdToken = useCallback(async (): Promise<string | null> => {
+    if (usesFirebaseAuth) {
+      const fresh = await getFreshFirebaseIdToken();
+      if (fresh) return fresh;
+    }
+    return session?.idToken ?? null;
+  }, [usesFirebaseAuth, session?.idToken]);
+
   const linkMyMember = useCallback(
     async (memberId: string): Promise<boolean> => {
-      if (!session?.idToken) return false;
+      const token = await getFreshIdToken();
+      if (!token || !session) return false;
       try {
-        const res = await linkMemberEmail(session.idToken, memberId);
+        const res = await linkMemberEmail(token, memberId);
         const updatedEditor: VerifyEditorResponse = {
           ...session.editor,
           linkedMemberId: res.linkedMemberId,
         };
         const updatedSession: EditorSessionState = {
           ...session,
+          idToken: token,
           editor: updatedEditor,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSession));
@@ -263,7 +362,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [session, setMyMemberId, toast]
+    [getFreshIdToken, session, setMyMemberId, toast]
   );
 
   const dismissMemberLinkPrompt = useCallback(() => {
@@ -277,6 +376,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDismissedMemberLink(false);
     setReauthRequired(false);
     setAuthError(null);
+    void signOutFirebase().catch(() => {});
     toast.info('Đã chuyển về chế độ Viewer.');
     try {
       window.google?.accounts?.id?.disableAutoSelect();
@@ -289,10 +389,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (err: unknown): string => {
       if (err instanceof ApiClientError) {
         if (err.status === 401 || err.code === 'UNAUTHORIZED') {
-          localStorage.removeItem(STORAGE_KEY);
+          if (!usesFirebaseAuth) {
+            localStorage.removeItem(STORAGE_KEY);
+          }
           attemptSilentGoogleRefresh(true);
           const msg =
-            'Phiên đăng nhập Editor đã hết hạn (1 giờ). Vui lòng xác nhận lại để tiếp tục lưu.';
+            'Phiên đăng nhập đã hết hạn. Vui lòng xác nhận lại để tiếp tục lưu.';
           toast.error(msg);
           return msg;
         }
@@ -303,7 +405,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast.error(msg);
       return msg;
     },
-    [toast, attemptSilentGoogleRefresh]
+    [toast, attemptSilentGoogleRefresh, usesFirebaseAuth]
   );
 
   const openLoginModal = useCallback(() => {
@@ -336,6 +438,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoggedIn,
         isEditor,
         isAdmin: session?.editor?.role === 'ADMIN',
+        usesFirebaseAuth,
         myMemberId,
         setMyMemberId,
         needsMemberLink,
@@ -348,8 +451,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         openLoginModal,
         closeLoginModal,
         loginWithIdToken,
+        loginWithFirebase,
         loginMockEditor,
         loginMockMember,
+        getFreshIdToken,
         logout,
         handleApiError,
         clearAuthError,
