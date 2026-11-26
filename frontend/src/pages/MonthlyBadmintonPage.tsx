@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Calculator,
+  Calendar as CalendarIcon,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -14,6 +15,7 @@ import {
   QrCode,
   Receipt,
   RotateCcw,
+  Search,
   Trash2,
   UserCheck,
   Users,
@@ -39,11 +41,22 @@ import type {
   MonthlyBillDetail,
   ShuttleContributionItem,
 } from '../types';
-import { formatShortDateVN, getTodayDateStr } from '../utils/dateFilters';
+import { formatDateVN, formatShortDateVN, getTodayDateStr } from '../utils/dateFilters';
 import { calculateDetailedMonthlyBill } from '../utils/monthlyBill';
 import { getOverdueInfo } from '../utils/overdue';
+import { calculateDurationHours, generateMonthScheduleDates } from '../utils/schedule';
 import { buildTransferContent, buildVietQrUrl, formatVND } from '../utils/vietqr';
 import { buildMonthlyBillZaloMessage } from '../utils/zaloShare';
+
+const ISSUE_WEEKDAY_OPTIONS = [
+  { val: 1, label: 'T2' },
+  { val: 2, label: 'T3' },
+  { val: 3, label: 'T4' },
+  { val: 4, label: 'T5' },
+  { val: 5, label: 'T6' },
+  { val: 6, label: 'T7' },
+  { val: 0, label: 'CN' },
+];
 
 interface MonthlyBadmintonPageProps {
   bootstrap: BootstrapData | null;
@@ -96,6 +109,13 @@ export function MonthlyBadmintonPage({
   const [carryInStr, setCarryInStr] = useState('0');
   const [appliedCredits, setAppliedCredits] = useState<ShuttleContributionItem[]>([]);
   const [selectedMainIds, setSelectedMainIds] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [includeSchedule, setIncludeSchedule] = useState(false);
+  const [schedWeekdays, setSchedWeekdays] = useState<number[]>([1, 3, 5]);
+  const [schedStartTime, setSchedStartTime] = useState('20:00');
+  const [schedEndTime, setSchedEndTime] = useState('21:30');
+  const [schedCourts, setSchedCourts] = useState('2');
+  const [schedOnlyFromToday, setSchedOnlyFromToday] = useState(false);
 
   // Modal Thêm / Sửa danh sách người góp ống cầu trong tháng
   const [contribOpen, setContribOpen] = useState(false);
@@ -117,6 +137,53 @@ export function MonthlyBadmintonPage({
     () => members.filter((m) => m.is_active && m.type === 'MAIN'),
     [members]
   );
+  const sortedActiveMembers = useMemo(
+    () =>
+      [...activeMembers].sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'MAIN' ? -1 : 1;
+        return a.name.localeCompare(b.name, 'vi');
+      }),
+    [activeMembers]
+  );
+  const filteredIssueMembers = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    if (!q) return sortedActiveMembers;
+    return sortedActiveMembers.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.aliases.toLowerCase().includes(q)
+    );
+  }, [sortedActiveMembers, memberSearch]);
+
+  const roleChangeCounts = useMemo(() => {
+    const selectedSet = new Set(selectedMainIds);
+    let toMain = 0;
+    let toGuest = 0;
+    for (const m of activeMembers) {
+      const checked = selectedSet.has(m.member_id);
+      if (checked && m.type !== 'MAIN') toMain++;
+      if (!checked && m.type === 'MAIN') toGuest++;
+    }
+    return { toMain, toGuest };
+  }, [activeMembers, selectedMainIds]);
+
+  const schedDatesPreview = useMemo(
+    () =>
+      includeSchedule
+        ? generateMonthScheduleDates(
+            activeMonth,
+            schedWeekdays,
+            schedOnlyFromToday ? todayStr : undefined
+          )
+        : [],
+    [includeSchedule, activeMonth, schedWeekdays, schedOnlyFromToday, todayStr]
+  );
+
+  const schedSuggestedCourtFee = useMemo(() => {
+    const hours = calculateDurationHours(schedStartTime, schedEndTime);
+    const courtsNum = Math.max(1, Number(schedCourts) || 2);
+    const price = settings?.court_price_per_hour || 0;
+    if (!includeSchedule || hours <= 0 || price <= 0) return 0;
+    return Math.round(schedDatesPreview.length * courtsNum * hours * price);
+  }, [includeSchedule, schedDatesPreview.length, schedStartTime, schedEndTime, schedCourts, settings?.court_price_per_hour]);
 
   const membersMap = useMemo(() => {
     const map = new Map<string, Member>();
@@ -189,6 +256,10 @@ export function MonthlyBadmintonPage({
         ? currentDueMemberIds
         : mainMembers.map((m) => m.member_id)
     );
+    setMemberSearch('');
+    setIncludeSchedule(false);
+    setSchedCourts(String(settings?.default_court_count || 2));
+    setSchedOnlyFromToday(activeMonth === todayStr.slice(0, 7));
     setIssueOpen(true);
   };
 
@@ -247,7 +318,11 @@ export function MonthlyBadmintonPage({
     e.preventDefault();
     if (!idToken || busyKey) return;
     if (selectedMainIds.length === 0) {
-      toast.error('Cần chọn ít nhất 1 thành viên MAIN.');
+      toast.error('Cần chọn ít nhất 1 thành viên đóng tiền tháng.');
+      return;
+    }
+    if (includeSchedule && schedWeekdays.length === 0) {
+      toast.error('Hãy chọn ít nhất 1 thứ trong tuần hoặc tắt mục Đặt lịch.');
       return;
     }
 
@@ -274,10 +349,24 @@ export function MonthlyBadmintonPage({
           venueTotalOverride,
           carryInOverride: Number(carryInStr) !== (bill?.carry_in ?? 0),
         },
+        syncMemberTypes: true,
+        scheduleConfig: includeSchedule
+          ? {
+              weekdays: schedWeekdays,
+              startTime: schedStartTime,
+              endTime: schedEndTime,
+              courts: Math.max(1, Number(schedCourts) || 2),
+              fromDate: schedOnlyFromToday ? todayStr : undefined,
+            }
+          : undefined,
       });
       setIssueOpen(false);
       await onRefreshAll();
-      toast.success(`Đã phát hành hóa đơn ${formatMonthLabel(activeMonth)}.`);
+      toast.success(
+        `Đã phát hành hóa đơn ${formatMonthLabel(activeMonth)}${
+          includeSchedule ? ' & đặt lịch tháng' : ''
+        }.`
+      );
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -1313,33 +1402,212 @@ export function MonthlyBadmintonPage({
               </div>
             </div>
 
-            {/* 3. Chọn MAIN & Xem trước bảng chia */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                3. Chọn thành viên chính áp dụng ({selectedMainIds.length}/{mainMembers.length})
+            {/* 3. Chọn thành viên đóng tháng (tích -> Chính, bỏ tích -> Vãng lai) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    3. Chọn thành viên đóng tháng ({selectedMainIds.length}/{activeMembers.length})
+                  </label>
+                  <p className="text-[11px] text-slate-500">
+                    Người được tích thành <strong>Thành viên chính</strong>, bỏ tích tự chuyển sang{' '}
+                    <strong>Vãng lai</strong>.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMainIds(mainMembers.map((m) => m.member_id))}
+                  className="text-[11px] font-semibold text-[#1d5fa7] hover:underline cursor-pointer"
+                >
+                  Chỉ chọn Chính hiện tại
+                </button>
+              </div>
+
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={memberSearch}
+                  onChange={(e) => setMemberSearch(e.target.value)}
+                  placeholder="Tìm nhanh thành viên..."
+                  className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#1d5fa7]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-0.5">
+                {filteredIssueMembers.map((m) => {
+                  const isChecked = selectedMainIds.includes(m.member_id);
+                  const wasMain = m.type === 'MAIN';
+                  const badge =
+                    !wasMain && isChecked
+                      ? { text: 'VL → Chính', cls: 'bg-sky-100 text-sky-800' }
+                      : wasMain && !isChecked
+                      ? { text: 'Chính → VL', cls: 'bg-amber-100 text-amber-800' }
+                      : wasMain
+                      ? { text: 'Chính', cls: 'bg-emerald-50 text-emerald-700' }
+                      : { text: 'Vãng lai', cls: 'bg-slate-100 text-slate-500' };
+
+                  return (
+                    <label
+                      key={m.member_id}
+                      className={`flex items-center justify-between gap-2 text-xs font-semibold px-2.5 py-2 rounded-lg border cursor-pointer transition ${
+                        isChecked
+                          ? 'bg-sky-50/70 border-sky-200 text-slate-900'
+                          : 'bg-slate-50 border-slate-200/70 text-slate-600'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() =>
+                            setSelectedMainIds((prev) =>
+                              prev.includes(m.member_id)
+                                ? prev.filter((id) => id !== m.member_id)
+                                : [...prev, m.member_id]
+                            )
+                          }
+                          className="accent-[#113b66] shrink-0"
+                        />
+                        <span className="truncate">{m.name}</span>
+                      </span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${badge.cls}`}>
+                        {badge.text}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {(roleChangeCounts.toMain > 0 || roleChangeCounts.toGuest > 0) && (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-900 flex items-center gap-2 flex-wrap">
+                  <span>Khi xác nhận sẽ tự cập nhật:</span>
+                  {roleChangeCounts.toMain > 0 && (
+                    <span className="font-bold text-sky-800">
+                      +{roleChangeCounts.toMain} người sang Chính
+                    </span>
+                  )}
+                  {roleChangeCounts.toGuest > 0 && (
+                    <span className="font-bold text-amber-800">
+                      {roleChangeCounts.toGuest} người sang Vãng lai
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 4. Đặt lịch cầu lông tháng này (không bắt buộc) */}
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+              <label className="flex items-center justify-between gap-2 cursor-pointer">
+                <span className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                  <CalendarIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>4. Đặt lịch đánh cầu tháng này (không bắt buộc)</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={includeSchedule}
+                  onChange={(e) => setIncludeSchedule(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-600"
+                />
               </label>
-              <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
-                {mainMembers.map((m) => (
-                  <label
-                    key={m.member_id}
-                    className="flex items-center gap-2 text-xs font-semibold bg-slate-50 px-2.5 py-2 rounded-lg cursor-pointer"
-                  >
+
+              {includeSchedule && (
+                <div className="space-y-2.5 pt-2 border-t border-slate-200">
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-600 mb-1">
+                      Chọn ngày đánh trong tuần
+                    </p>
+                    <div className="grid grid-cols-7 gap-1">
+                      {ISSUE_WEEKDAY_OPTIONS.map((opt) => {
+                        const active = schedWeekdays.includes(opt.val);
+                        return (
+                          <button
+                            key={opt.val}
+                            type="button"
+                            onClick={() =>
+                              setSchedWeekdays((prev) =>
+                                prev.includes(opt.val)
+                                  ? prev.filter((x) => x !== opt.val)
+                                  : [...prev, opt.val]
+                              )
+                            }
+                            className={`py-1.5 rounded-lg text-[11px] font-bold cursor-pointer ${
+                              active
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                        Bắt đầu
+                      </label>
+                      <input
+                        type="time"
+                        value={schedStartTime}
+                        onChange={(e) => setSchedStartTime(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                        Kết thúc
+                      </label>
+                      <input
+                        type="time"
+                        value={schedEndTime}
+                        onChange={(e) => setSchedEndTime(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                        Số sân
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={schedCourts}
+                        onChange={(e) => setSchedCourts(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={selectedMainIds.includes(m.member_id)}
-                      onChange={() =>
-                        setSelectedMainIds((prev) =>
-                          prev.includes(m.member_id)
-                            ? prev.filter((id) => id !== m.member_id)
-                            : [...prev, m.member_id]
-                        )
-                      }
-                      className="accent-[#113b66]"
+                      checked={schedOnlyFromToday}
+                      onChange={(e) => setSchedOnlyFromToday(e.target.checked)}
+                      className="accent-emerald-600"
                     />
-                    <span className="truncate">{m.name}</span>
+                    <span>Chỉ tạo từ hôm nay ({formatDateVN(todayStr)}) trở đi</span>
                   </label>
-                ))}
-              </div>
+
+                  <div className="flex items-center justify-between gap-2 flex-wrap text-[11px] text-slate-600 bg-white rounded-xl px-2.5 py-2 border border-slate-200">
+                    <span>
+                      Sẽ tạo tối đa <strong className="text-emerald-700">{schedDatesPreview.length} buổi</strong>{' '}
+                      (gắn {selectedMainIds.length} thành viên chính)
+                    </span>
+                    {schedSuggestedCourtFee > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCourtFeeStr(String(schedSuggestedCourtFee))}
+                        className="font-bold text-[#1d5fa7] hover:underline cursor-pointer"
+                      >
+                        Áp vào Tiền sân ({formatVND(schedSuggestedCourtFee)})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Preview kết quả chia */}

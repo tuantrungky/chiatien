@@ -1846,7 +1846,35 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     memberIds = mains.map(function (m) { return m.member_id; });
   }
   if (memberIds.length === 0) {
-    throw createAppError_('BAD_REQUEST', 'Phải chọn ít nhất 1 thành viên MAIN để chia hóa đơn tháng.');
+    throw createAppError_('BAD_REQUEST', 'Phải chọn ít nhất 1 thành viên để chia hóa đơn tháng.');
+  }
+
+  var now = nowIso_();
+
+  // Đồng bộ vai trò thành viên: thành viên được tích -> MAIN, không được tích -> GUEST (chỉ với thành viên đang hoạt động)
+  if (toBoolean_(p.syncMemberTypes !== undefined ? p.syncMemberTypes : p.sync_member_types)) {
+    var selectedSet = {};
+    for (var smi = 0; smi < memberIds.length; smi++) {
+      var cleanId = String(memberIds[smi] || '').trim();
+      if (cleanId) selectedSet[cleanId] = true;
+    }
+    updateRowsByCondition_(
+      'Members',
+      function (row) {
+        if (!toBoolean_(row.is_active)) return false;
+        var mIdRow = String(row.member_id || '').trim();
+        var targetType = selectedSet[mIdRow] ? 'MAIN' : 'GUEST';
+        return String(row.type || '').trim().toUpperCase() !== targetType;
+      },
+      function (row) {
+        var mIdRow = String(row.member_id || '').trim();
+        row.type = selectedSet[mIdRow] ? 'MAIN' : 'GUEST';
+        row.updated_at = now;
+        return row;
+      }
+    );
+    members = getMembersList(false);
+    membersMap = buildMembersMap_(members);
   }
 
   var currentData = getMonthlyBillData(targetMonth);
@@ -1875,7 +1903,6 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     ? Math.ceil(grossToDistribute / memberIds.length / unit) * unit
     : 0;
   var toCollect = Math.max(0, estimate - carryIn);
-  var now = nowIso_();
 
   // Giữ trạng thái is_paid của thành viên đã đóng trước đó nếu phát hành lại hóa đơn tháng
   var oldPaidMap = {};
@@ -1995,6 +2022,34 @@ function issueMonthlyBillRecord(payload, editorEmail) {
       applied_credits_total: appliedCreditsTotal,
       carry_over_credits: carryOverCreditsStr
     }]);
+  }
+
+  // Đặt lịch đánh cầu tháng tùy chọn ngay khi phát hành hóa đơn tháng
+  var sc = p.scheduleConfig || p.schedule_config;
+  if (sc && Array.isArray(sc.weekdays) && sc.weekdays.length > 0) {
+    generateScheduleRecord({
+      month: targetMonth,
+      weekdays: sc.weekdays,
+      startTime: sc.startTime || sc.start_time || '20:00',
+      endTime: sc.endTime || sc.end_time || '21:30',
+      courts: Math.max(1, toInt_(sc.courts, settings.default_court_count || 2)),
+      plannedMemberIds: memberIds,
+      fromDate: String(sc.fromDate || sc.from_date || '').trim()
+    });
+    updateRowsByCondition_(
+      'Schedule',
+      function (row) {
+        return (
+          String(row.date || '').trim().slice(0, 7) === targetMonth &&
+          String(row.status || 'PLANNED').trim().toUpperCase() === 'PLANNED'
+        );
+      },
+      function (row) {
+        row.planned_member_ids = memberIds.join(',');
+        row.updated_at = now;
+        return row;
+      }
+    );
   }
 
   return getMonthlyBillData(targetMonth);

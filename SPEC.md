@@ -140,6 +140,8 @@ caulong-nhau/
 #### C. Hóa đơn Cầu lông theo tháng (`Monthly_Bills` & `Monthly_Dues`) — Thay cho quỹ cố định cũ
 1. **Phát hành đầu tháng (`issueMonthlyBill`):**
    - Hỗ trợ tách chi tiết theo báo giá chủ sân: `Tổng hóa đơn chủ sân = Tiền sân (court_fee) + (Số ống cầu * Giá/ống) + Tiền thêm giờ tháng trước (prev_overtime_fee)`. Editor có thể sửa tay toàn bộ từng ô (kể cả ghi đè tổng tiền theo con số chủ sân đưa ra hoặc sửa tay `carry_in`).
+   - **Đồng bộ danh sách thành viên (`syncMemberTypes = true`):** Khi phát hành hóa đơn tháng, giao diện hiển thị toàn bộ thành viên đang hoạt động (`MAIN` + `GUEST`); người được tích tự động cập nhật thành `MAIN` (Thành viên chính), người không được tích tự động chuyển sang `GUEST` (Vãng lai) trên tab `Members` (không làm thay đổi `Attendance.member_type_snapshot` lịch sử).
+   - **Đặt lịch cầu lông tùy chọn (`scheduleConfig`, không bắt buộc):** Có thể tích chọn đặt lịch đánh cố định tháng ngay trong hộp thoại phát hành hóa đơn (thứ trong tuần, giờ chơi, số sân, tùy chọn từ hôm nay trở đi), đồng thời gán danh sách `MAIN` mới vào các ngày `PLANNED` trong tháng.
    - `carry_in`: Lấy từ `carry_out` của tháng trước (`0` nếu tháng trước chưa có).
    - **Khấu trừ người góp ống cầu tháng trước (`appliedCredits`):**
      - Trong tháng, Editor ghi nhận ai mua/góp bao nhiêu ống cầu với giá riêng tự nhập (`saveMonthlyContributions` lưu JSON trong `Monthly_Bills.shuttle_contributions`).

@@ -647,6 +647,14 @@ export interface UpdateScheduleDayPayload {
   note?: string;
 }
 
+export interface IssueMonthlyBillScheduleConfig {
+  weekdays: number[];
+  startTime: string;
+  endTime: string;
+  courts: number;
+  fromDate?: string;
+}
+
 export interface IssueMonthlyBillPayload {
   month: string;
   estimate: number;
@@ -659,6 +667,8 @@ export interface IssueMonthlyBillPayload {
   carryIn?: number;
   appliedCredits?: ShuttleContributionItem[];
   billDetail?: MonthlyBillDetail;
+  syncMemberTypes?: boolean;
+  scheduleConfig?: IssueMonthlyBillScheduleConfig;
 }
 
 export interface SaveMonthlyContributionsPayload {

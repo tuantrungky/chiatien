@@ -1236,6 +1236,19 @@ export async function issueMonthlyBill(
     return gasPost<MonthlyBillData>('issueMonthlyBill', idToken, payload);
   }
   const current = buildMockMonthlyBill(payload.month);
+  if (payload.syncMemberTypes) {
+    const selectedSet = new Set(payload.memberIds);
+    const now = nowIso();
+    for (const m of mockState.members) {
+      if (!m.is_active) continue;
+      const nextType = selectedSet.has(m.member_id) ? 'MAIN' : 'GUEST';
+      if (m.type !== nextType) {
+        m.type = nextType;
+        m.updated_at = now;
+      }
+    }
+  }
+
   const carryIn = payload.carryIn !== undefined ? payload.carryIn : current.bill.carry_in;
   const appliedCredits = payload.appliedCredits ?? current.prevMonthContributions ?? [];
   const courtFee = payload.courtFee ?? payload.estimate;
@@ -1315,6 +1328,38 @@ export async function issueMonthlyBill(
   };
   if (existingBillIdx >= 0) mockState.monthlyBills[existingBillIdx] = nextBill;
   else mockState.monthlyBills.push(nextBill);
+
+  const sc = payload.scheduleConfig;
+  if (sc && Array.isArray(sc.weekdays) && sc.weekdays.length > 0) {
+    const dates = generateMonthScheduleDates(payload.month, sc.weekdays, sc.fromDate);
+    const existingDates = new Set(mockState.schedule.map((d) => d.date));
+    const fixedByDate = new Map<string, (typeof mockState.sessions)[number]>();
+    for (const s of mockState.sessions) {
+      if (s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC' && s.date.slice(0, 7) === payload.month) {
+        if (!fixedByDate.has(s.date)) fixedByDate.set(s.date, s);
+      }
+    }
+    for (const d of dates) {
+      if (existingDates.has(d)) continue;
+      const matched = fixedByDate.get(d);
+      mockState.schedule.push({
+        plan_id: `PLN_MOCK_${d}`,
+        date: d,
+        start_time: sc.startTime || '20:00',
+        end_time: sc.endTime || '21:30',
+        courts: Math.max(1, sc.courts || 2),
+        planned_member_ids: payload.memberIds.join(','),
+        status: matched ? 'DONE' : 'PLANNED',
+        session_id: matched?.session_id || '',
+        note: '',
+      });
+    }
+    for (const d of mockState.schedule) {
+      if (d.date.slice(0, 7) === payload.month && d.status === 'PLANNED') {
+        d.planned_member_ids = payload.memberIds.join(',');
+      }
+    }
+  }
 
   return mockWriteDelay('issueMonthlyBill', buildMockMonthlyBill(payload.month));
 }
