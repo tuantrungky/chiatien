@@ -14,6 +14,7 @@ import type {
 } from '../types';
 import { getTodayDateStr } from '../utils/dateFilters';
 import { simplifyDebts } from '../utils/debtSimplifier';
+import { trackWrite, wasWriteJustFinished } from '../utils/writeTracker';
 
 const SWR_PREFIX = 'cln_swr_v5';
 
@@ -104,7 +105,11 @@ export function useClubData(): UseClubDataResult {
       setError(null);
 
       try {
-        const res = await fetchAllData(periodType, refDate, activeMonth);
+        const res = wasWriteJustFinished(1500)
+          ? await trackWrite('Đang đồng bộ lại dữ liệu mới nhất...', () =>
+              fetchAllData(periodType, refDate, activeMonth)
+            )
+          : await fetchAllData(periodType, refDate, activeMonth);
         const now = Date.now();
         setAllData(res);
         setLastUpdatedAt(now);

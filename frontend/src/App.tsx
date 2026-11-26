@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
+import { GlobalSavingOverlay } from './components/GlobalSavingOverlay';
 import { Layout, type ActiveTab } from './components/Layout';
 import { MemberIdentityModal } from './components/MemberIdentityModal';
 import { ReauthModal } from './components/ReauthModal';
@@ -332,6 +333,8 @@ export default function App() {
       />
 
       <ReauthModal />
+
+      <GlobalSavingOverlay />
     </Layout>
   );
 }

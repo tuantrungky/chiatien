@@ -47,6 +47,7 @@ import { buildBadmintonDues, simplifyDebts } from '../utils/debtSimplifier';
 import { calculateDrinkingSplit } from '../utils/drinkingSplit';
 import { calculateDetailedMonthlyBill, calculateMonthlyBill } from '../utils/monthlyBill';
 import { estimateCourtCostFromSchedule, generateMonthScheduleDates } from '../utils/schedule';
+import { trackWrite, WRITE_ACTION_LABELS } from '../utils/writeTracker';
 import {
   initialMockAttendances,
   initialMockEditors,
@@ -100,6 +101,10 @@ function mockDelay<T>(value: T, ms = 140): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
+function mockWriteDelay<T>(action: string, value: T, ms = 350): Promise<T> {
+  return trackWrite(action, () => mockDelay(value, ms));
+}
+
 async function gasGet<T>(
   action: string,
   params: Record<string, string | number | boolean | undefined> = {}
@@ -129,29 +134,36 @@ async function gasGet<T>(
 }
 
 async function gasPost<T>(action: string, idToken: string, payload: unknown): Promise<T> {
-  const res = await fetch(GAS_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action,
-      id_token: idToken,
-      payload,
-    }),
-  });
+  const exec = async (): Promise<T> => {
+    const res = await fetch(GAS_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action,
+        id_token: idToken,
+        payload,
+      }),
+    });
 
-  if (!res.ok) {
-    throw new ApiClientError('INTERNAL_ERROR', `Lỗi HTTP ${res.status} từ GAS`, res.status);
-  }
+    if (!res.ok) {
+      throw new ApiClientError('INTERNAL_ERROR', `Lỗi HTTP ${res.status} từ GAS`, res.status);
+    }
 
-  const json = (await res.json()) as ApiResponse<T>;
-  if (!json.ok || json.data === null) {
-    throw new ApiClientError(
-      json.error?.code || 'INTERNAL_ERROR',
-      json.error?.message || 'Yêu cầu POST thất bại.',
-      json.error?.status
-    );
+    const json = (await res.json()) as ApiResponse<T>;
+    if (!json.ok || json.data === null) {
+      throw new ApiClientError(
+        json.error?.code || 'INTERNAL_ERROR',
+        json.error?.message || 'Yêu cầu POST thất bại.',
+        json.error?.status
+      );
+    }
+    return json.data;
+  };
+
+  if (WRITE_ACTION_LABELS[action]) {
+    return trackWrite(action, exec);
   }
-  return json.data;
+  return exec();
 }
 
 function prevMonthStr(monthStr: string): string {
@@ -686,7 +698,7 @@ export async function linkMemberEmail(
   }
   const m = mockState.members.find((x) => x.member_id === memberId);
   if (m) m.email = 'member.mock@gmail.com';
-  return mockDelay({ linkedMemberId: memberId, email: 'member.mock@gmail.com' });
+  return mockWriteDelay('linkMemberEmail', { linkedMemberId: memberId, email: 'member.mock@gmail.com' });
 }
 
 export async function undoSettlement(
@@ -750,7 +762,7 @@ export async function undoSettlement(
     }
   }
   mockState.settlements = mockState.settlements.filter((s) => s.settlement_id !== settlementId);
-  return mockDelay({ undoneSettlementId: settlementId, updatedDebts: buildMockDebts() });
+  return mockWriteDelay('undoSettlement', { undoneSettlementId: settlementId, updatedDebts: buildMockDebts() });
 }
 
 export async function parseBillAI(
@@ -760,7 +772,8 @@ export async function parseBillAI(
   if (!IS_MOCK_MODE) {
     return gasPost<ParseBillAIResponse>('parseBillAI', idToken, payload);
   }
-  return mockDelay(
+  return mockWriteDelay(
+    'parseBillAI',
     {
       receipt_drive_id: 'MOCK_FILE_ID',
       receipt_url: 'https://drive.google.com',
@@ -966,7 +979,12 @@ export async function createSession(
     }
   }
 
-  return mockDelay({ session, createdMembers, attendances: newAttendances, items: savedItems });
+  return mockWriteDelay('createSession', {
+    session,
+    createdMembers,
+    attendances: newAttendances,
+    items: savedItems,
+  });
 }
 
 export async function updateSession(
@@ -1003,7 +1021,7 @@ export async function updateSession(
       it.session_id = payload.sessionId;
     });
 
-  return mockDelay({ session: created.session });
+  return mockWriteDelay('updateSession', { session: created.session });
 }
 
 export async function deleteSession(
@@ -1028,7 +1046,7 @@ export async function deleteSession(
   mockState.sessions = mockState.sessions.filter((s) => s.session_id !== sessionId);
   mockState.attendances = mockState.attendances.filter((a) => a.session_id !== sessionId);
   mockState.sessionItems = mockState.sessionItems.filter((it) => it.session_id !== sessionId);
-  return mockDelay({ deletedSessionId: sessionId });
+  return mockWriteDelay('deleteSession', { deletedSessionId: sessionId });
 }
 
 export async function confirmPayment(
@@ -1070,7 +1088,7 @@ export async function confirmPayment(
       confirmed_by: 'tuantrungky@gmail.com',
     };
     mockState.settlements.push(settlement);
-    return mockDelay({ settlement, updatedDebts: buildMockDebts() });
+    return mockWriteDelay('confirmPayment', { settlement, updatedDebts: buildMockDebts() });
   }
 
   // DRINKING
@@ -1136,7 +1154,7 @@ export async function confirmPayment(
     }
   }
 
-  return mockDelay({ settlement, updatedDebts: buildMockDebts() });
+  return mockWriteDelay('confirmPayment', { settlement, updatedDebts: buildMockDebts() });
 }
 
 export async function generateSchedule(
@@ -1169,7 +1187,7 @@ export async function generateSchedule(
       note: payload.note || '',
     });
   }
-  return mockDelay(buildMockSchedule(payload.month));
+  return mockWriteDelay('generateSchedule', buildMockSchedule(payload.month));
 }
 
 export async function updateScheduleDay(
@@ -1181,7 +1199,7 @@ export async function updateScheduleDay(
   }
   if (payload.operation === 'DELETE' && payload.planId) {
     mockState.schedule = mockState.schedule.filter((d) => d.plan_id !== payload.planId);
-    return mockDelay({ deletedPlanId: payload.planId });
+    return mockWriteDelay('updateScheduleDay', { deletedPlanId: payload.planId });
   }
   if (payload.planId) {
     const row = mockState.schedule.find((d) => d.plan_id === payload.planId);
@@ -1207,7 +1225,7 @@ export async function updateScheduleDay(
       note: payload.note || '',
     });
   }
-  return mockDelay({ schedule: buildMockSchedule(payload.date.slice(0, 7)) });
+  return mockWriteDelay('updateScheduleDay', { schedule: buildMockSchedule(payload.date.slice(0, 7)) });
 }
 
 export async function issueMonthlyBill(
@@ -1298,7 +1316,7 @@ export async function issueMonthlyBill(
   if (existingBillIdx >= 0) mockState.monthlyBills[existingBillIdx] = nextBill;
   else mockState.monthlyBills.push(nextBill);
 
-  return mockDelay(buildMockMonthlyBill(payload.month));
+  return mockWriteDelay('issueMonthlyBill', buildMockMonthlyBill(payload.month));
 }
 
 export async function saveMonthlyContributions(
@@ -1337,7 +1355,7 @@ export async function saveMonthlyContributions(
       shuttle_contributions: serialized,
     });
   }
-  return mockDelay(buildMockMonthlyBill(payload.month));
+  return mockWriteDelay('saveMonthlyContributions', buildMockMonthlyBill(payload.month));
 }
 
 export async function markDuePaid(
@@ -1353,7 +1371,7 @@ export async function markDuePaid(
   due.is_paid = nextPaid;
   due.paid_at = nextPaid ? nowIso() : '';
   due.confirmed_by = nextPaid ? 'tuantrungky@gmail.com' : '';
-  return mockDelay({
+  return mockWriteDelay('markDuePaid', {
     monthlyBill: buildMockMonthlyBill(due.month),
     debts: buildMockDebts(),
   });
@@ -1385,7 +1403,7 @@ export async function closeMonth(
   if (idx >= 0) mockState.monthlyBills[idx] = closedBill;
   else mockState.monthlyBills.push(closedBill);
 
-  return mockDelay(buildMockMonthlyBill(payload.month));
+  return mockWriteDelay('closeMonth', buildMockMonthlyBill(payload.month));
 }
 
 export async function upsertMember(
@@ -1412,7 +1430,7 @@ export async function upsertMember(
       updated_at: now,
     };
     mockState.members.push(member);
-    return mockDelay({ member });
+    return mockWriteDelay('upsertMember', { member });
   }
   const idx = mockState.members.findIndex((m) => m.member_id === payload.memberId);
   if (idx === -1) throw new ApiClientError('NOT_FOUND', 'Không tìm thấy thành viên');
@@ -1430,7 +1448,7 @@ export async function upsertMember(
     updated_at: now,
   };
   mockState.members[idx] = updated;
-  return mockDelay({ member: updated });
+  return mockWriteDelay('upsertMember', { member: updated });
 }
 
 export async function updateSettings(
@@ -1451,7 +1469,7 @@ export async function updateSettings(
   if (next.drive_folder_id !== undefined) mockState.settings.drive_folder_id = String(next.drive_folder_id);
   if (next.rounding_unit !== undefined) mockState.settings.rounding_unit = Number(next.rounding_unit) || 1000;
   if (next.transfer_prefix !== undefined) mockState.settings.transfer_prefix = String(next.transfer_prefix);
-  return mockDelay({ settings: { ...mockState.settings } });
+  return mockWriteDelay('updateSettings', { settings: { ...mockState.settings } });
 }
 
 export async function fetchEditors(idToken: string): Promise<Editor[]> {
@@ -1473,7 +1491,7 @@ export async function manageEditors(
   const email = payload.email.trim().toLowerCase();
   if (payload.operation === 'DELETE') {
     mockState.editors = mockState.editors.filter((e) => e.email.toLowerCase() !== email);
-    return mockDelay([...mockState.editors]);
+    return mockWriteDelay('manageEditors', [...mockState.editors]);
   }
   const idx = mockState.editors.findIndex((e) => e.email.toLowerCase() === email);
   if (idx >= 0) {
@@ -1492,5 +1510,5 @@ export async function manageEditors(
       added_at: nowIso(),
     });
   }
-  return mockDelay([...mockState.editors]);
+  return mockWriteDelay('manageEditors', [...mockState.editors]);
 }
