@@ -677,14 +677,22 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
               <label className="block text-xs font-semibold text-slate-600 mb-1">
                 Làm tròn chia tiền (VND)
               </label>
-              <input
-                type="number"
-                min={100}
-                step={500}
+              <select
                 value={roundingUnit}
                 onChange={(e) => setRoundingUnit(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
-              />
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
+              >
+                {!['1000', '500', '100', '5000', '10000'].includes(roundingUnit) && roundingUnit && (
+                  <option value={roundingUnit}>
+                    {roundingUnit}đ (Không chuẩn — nên đổi về 1.000đ)
+                  </option>
+                )}
+                <option value="1000">1.000đ (Khuyên dùng)</option>
+                <option value="500">500đ</option>
+                <option value="100">100đ</option>
+                <option value="5000">5.000đ</option>
+                <option value="10000">10.000đ</option>
+              </select>
             </div>
           </div>
 
