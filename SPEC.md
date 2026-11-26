@@ -148,6 +148,13 @@ caulong-nhau/
      $$\text{carry\_out} = \text{carry\_in} + \text{billed\_total} + \text{guest\_income} - \text{actual\_cost}$$
    - Số `carry_out` này sẽ tự động trở thành `carry_in` của tháng tiếp theo, giúp tiền vãng lai và phần dư/thiếu tháng trước tự động bù trừ công bằng vào tiền mỗi người phải đóng tháng sau.
 
+#### D. Buổi cầu phát sinh ngoài lịch cố định (`billing_mode = AD_HOC`)
+- Khi đánh thêm một buổi cầu không thuộc lịch cố định tháng (VD: buổi đánh phát sinh cuối tuần / thứ khác), Editor tick chọn **`Buổi cầu phát sinh (ngoài lịch cố định)`**.
+- **Cách chia tiền:** Lấy tổng chi phí buổi (`total_amount`) chia đều cho **tất cả người tham gia** (`attendee_count`, bao gồm cả `MAIN` và `GUEST`), làm tròn lên theo `unit = rounding_unit` (`1000`):
+  $$\text{per\_person\_amount} = \text{Math.ceil}\left(\frac{\text{total\_amount}}{\text{attendee\_count} \times \text{unit}}\right) \times \text{unit}$$
+- **Người nhận tiền (`payer_id`):** Mặc định là Thủ quỹ, cho phép đổi sang thành viên khác nếu người đó ứng tiền. Người ứng tiền tự động `is_paid = TRUE`, các thành viên còn lại ghi nợ chuyển thẳng cho `payer_id` (nhận VietQR theo tài khoản của `payer_id`).
+- **Tách bạch với hóa đơn tháng:** Buổi cầu `AD_HOC` **không** cộng vào `Monthly_Bills.actual_cost` và tiền `GUEST` của buổi đó **không** cộng vào `Monthly_Bills.guest_income` (tránh tính trùng vì đã chia và thu trực tiếp ở buổi phát sinh).
+
 ---
 
 ### 4.2. Luồng Ăn nhậu (`DRINKING`) & Góp món (`Session_Items`)
@@ -170,11 +177,12 @@ caulong-nhau/
 ### 4.3. Tách biệt Công nợ Cầu lông & Ăn nhậu
 
 1. **Công nợ Cầu lông (`debts.badminton`):**
-   - Gồm 2 danh sách:
+   - Gồm 3 danh sách (tách biệt hoàn toàn với Ăn nhậu):
      - `monthlyDues`: Các dòng `Monthly_Dues` chưa đóng (`is_paid = FALSE`) của thành viên `MAIN` -> **chuyển thẳng cho Thủ quỹ**.
-     - `guestDues`: Các dòng `Attendance` (`session_type = BADMINTON`, `member_type_snapshot = GUEST`, `is_paid = FALSE`) -> **chuyển thẳng cho Thủ quỹ**.
-   - Mỗi khoản có sẵn `transferContent` và `vietQrUrl` hướng về tài khoản của Thủ quỹ (`treasurer_member_id`).
-   - Editor xác nhận thu bằng `markDuePaid` (cho `Monthly_Dues`) hoặc `confirmPayment` (`category: 'BADMINTON'`, `mode: 'ITEMS'`) cho `guestDues`.
+     - `adhocDues`: Các dòng `Attendance` của buổi cầu phát sinh (`billing_mode = AD_HOC`, `is_paid = FALSE`, gồm cả `MAIN` và `GUEST`) -> **chuyển thẳng cho người ứng tiền (`creditor_id`)**.
+     - `guestDues`: Các dòng `Attendance` của buổi cầu cố định (`billing_mode = MONTHLY`, `member_type_snapshot = GUEST`, `is_paid = FALSE`) -> **chuyển thẳng cho Thủ quỹ**.
+   - Mỗi khoản có sẵn `transferContent` và `vietQrUrl` hướng về tài khoản người nhận tương ứng.
+   - Editor xác nhận thu bằng `markDuePaid` (cho `Monthly_Dues`) hoặc `confirmPayment` (`category: 'BADMINTON'`, `mode: 'ITEMS'`) cho `guestDues` và `adhocDues`.
 2. **Công nợ Ăn nhậu (`debts.drinking`):**
    - Chỉ tổng hợp từ các `Attendance` có `session_type = 'DRINKING'`, `is_paid = FALSE` và các `Settlements` có `category = 'DRINKING'`, `is_reconciled = FALSE`.
    - Tính `netBalance[member]`: trừ `net_amount` (`net_amount > 0` là nợ -> balance âm; `net_amount < 0` là được nhận -> balance dương), cộng trừ bù trừ với `Settlements` chưa `is_reconciled`.
@@ -202,7 +210,7 @@ Quy ước chung:
 `member_id`, `name`, `aliases`, `type` (`MAIN` | `GUEST`), `phone`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active`, `created_at`, `updated_at`
 
 ### 6.2. Tab `Sessions`
-`session_id`, `date`, `type` (`BADMINTON` | `DRINKING`), `title`, `total_amount`, `guest_fee`, `payer_id`, `per_person_amount`, `attendee_count`, `receipt_drive_id`, `receipt_url`, `receipt_summary`, `note`, `court_amount`, `shuttle_qty`, `shuttle_amount`, `other_amount`, `cost_detail` (JSON), `venue_type` (`RESTAURANT` | `HOME` | `""`), `plan_id`, `created_by`, `created_at`, `updated_at`
+`session_id`, `date`, `type` (`BADMINTON` | `DRINKING`), `title`, `total_amount`, `guest_fee`, `payer_id`, `per_person_amount`, `attendee_count`, `receipt_drive_id`, `receipt_url`, `receipt_summary`, `note`, `court_amount`, `shuttle_qty`, `shuttle_amount`, `other_amount`, `cost_detail` (JSON), `venue_type` (`RESTAURANT` | `HOME` | `""`), `plan_id`, `billing_mode` (`MONTHLY` | `AD_HOC` | `""`), `created_by`, `created_at`, `updated_at`
 
 ### 6.3. Tab `Attendance`
 `attendance_id`, `session_id`, `session_date`, `session_type`, `member_id`, `member_type_snapshot`, `fee_amount`, `creditor_id`, `contributed_amount`, `net_amount`, `is_paid`, `paid_at`, `settlement_id`, `note`
@@ -268,8 +276,8 @@ Cấu hình các khóa mặc định:
 
 | Route / Tab | Vai trò xem | Chức năng chính |
 | :--- | :--- | :--- |
-| `/` (**Tổng quan**) | Viewer & Editor | Thẻ `Chi Cầu lông (kỳ)`, `Chi Ăn nhậu (kỳ)`, `Dư cầu sang T.sau`, `Nợ chưa thu`; Biểu đồ so sánh Cầu lông vs Ăn nhậu (`recharts`); 2 khối chuyển khoản nhanh tách riêng Cầu lông (về Thủ quỹ) & Ăn nhậu. |
-| `/calendar` (**Lịch**) | Viewer & Editor | Lịch tháng hiển thị ngày đánh cầu (`Schedule`), buổi cầu lông & ăn nhậu đã diễn ra; Editor lập lịch tháng, thêm/hủy ngày, bấm **"Điểm danh & Ghi buổi"** mở nhanh form tạo buổi. |
+| `/` (**Tổng quan**) | Viewer & Editor | Thanh thao tác nhanh Editor (`+ Thêm buổi Cầu lông` / `+ Thêm buổi Ăn nhậu`); 4 thẻ KPI (`Chi Cầu lông`, `Chi Ăn nhậu`, `Bù trừ Cầu tháng` kèm nút xem công thức giải thích, `Nợ chưa thu`); Tiến độ đóng tiền Cầu tháng & Lịch đánh sắp tới; Chuyển khoản Cầu lông & Ăn nhậu kèm VietQR; Biểu đồ & 5 buổi gần nhất. |
+| `/calendar` (**Lịch**) | Viewer & Editor | Lịch tháng hiển thị ngày đánh cầu (`Schedule`), buổi cầu lông cố định/phát sinh & ăn nhậu; Editor lập lịch tháng, thêm/hủy ngày, bấm **"Điểm danh & Ghi buổi"** hoặc **"+ Buổi cầu phát sinh"** mở nhanh form tạo buổi. |
 | `/debts` (**Công nợ**) | Viewer & Editor | Tab `1. Tiền Cầu lông` (Tháng cầu `MAIN` + Vãng lai chưa đóng -> VietQR thẳng Thủ quỹ) & `2. Tiền Ăn nhậu` (Chuyển khoản tối ưu nội bộ + breakdown từng buổi + VietQR); Tab `Lịch sử buổi` hiển thị chi tiết sân/cầu/góp món & ảnh hóa đơn Drive. |
 | `/monthly-badminton` (**Tháng cầu**) | Viewer & Editor | Công thức minh bạch `Ước tính − Dư T.trước = Cần thu`, số dư thực tế chuyển T.sau; Danh sách thành viên `MAIN` đóng tiền cầu tháng kèm VietQR & đánh dấu đã đóng; Tab thống kê `Vãng lai theo tháng`. |
 | `/create-session` | Editor | Tạo/Sửa buổi `BADMINTON` (nhiều dòng sân + **Sân thêm giờ**, cầu, chi phí khác, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI; Tick tay + tìm kiếm + thêm nhanh vãng lai. |

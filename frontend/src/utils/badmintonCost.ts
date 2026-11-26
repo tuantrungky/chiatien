@@ -41,6 +41,18 @@ export function calculateCourtLineAmount(line: CourtLineItem): number {
   return Math.round(courts * hours * price);
 }
 
+export function calculateAdhocPerPerson(
+  totalAmount: number,
+  attendeeCount: number,
+  roundingUnit = 1000
+): number {
+  const total = Math.max(0, Math.round(Number(totalAmount) || 0));
+  const count = Math.max(0, Math.round(Number(attendeeCount) || 0));
+  const unit = Math.max(1, Math.round(Number(roundingUnit) || 1000));
+  if (total === 0 || count === 0) return 0;
+  return Math.ceil(total / count / unit) * unit;
+}
+
 export function calculateBadmintonCost(input: CalculateBadmintonCostInput): BadmintonCostResult {
   const linesWithAmount = (input.courtLines || []).map((line) => ({
     ...line,

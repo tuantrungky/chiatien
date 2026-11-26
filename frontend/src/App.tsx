@@ -34,6 +34,7 @@ export default function App() {
   const [prefillPlan, setPrefillPlan] = useState<ScheduleDay | null>(null);
   const [createInitialType, setCreateInitialType] = useState<SessionType>('BADMINTON');
   const [createInitialDate, setCreateInitialDate] = useState<string | undefined>(undefined);
+  const [createInitialAdhoc, setCreateInitialAdhoc] = useState<boolean>(false);
 
   const {
     loading,
@@ -96,15 +97,20 @@ export default function App() {
     setPrefillPlan(plan);
     setCreateInitialType('BADMINTON');
     setCreateInitialDate(plan.date);
+    setCreateInitialAdhoc(false);
     setActiveTab('create');
   };
 
-  const handleCreateNewSession = (type: SessionType, date?: string) => {
+  const handleCreateNewSession = (
+    type: SessionType,
+    options?: { date?: string; isAdhoc?: boolean }
+  ) => {
     if (!isEditor) return;
     setEditingSession(null);
     setPrefillPlan(null);
     setCreateInitialType(type);
-    setCreateInitialDate(date);
+    setCreateInitialDate(options?.date);
+    setCreateInitialAdhoc(Boolean(options?.isAdhoc));
     setActiveTab('create');
   };
 
@@ -117,12 +123,14 @@ export default function App() {
   const outstandingCount =
     (debts?.badminton.monthlyDues.length ?? 0) +
     (debts?.badminton.guestDues.length ?? 0) +
+    (debts?.badminton.adhocDues?.length ?? 0) +
     simplifiedDrinkingDebts.transfers.length;
 
   return (
     <Layout
       activeTab={activeTab}
       onChangeTab={handleChangeTab}
+      onCreateSession={(t) => handleCreateNewSession(t)}
       clubName={clubName}
       treasurer={treasurer}
       refreshing={refreshing}
@@ -154,9 +162,15 @@ export default function App() {
               dashboard={dashboard}
               sessions={sessions}
               debts={debts}
+              schedule={schedule}
+              monthlyBill={monthlyBill}
               simplifiedDrinkingDebts={simplifiedDrinkingDebts}
               onOpenQr={setQrModalData}
               onGoToDebts={() => setActiveTab('debts')}
+              onGoToCalendar={() => setActiveTab('calendar')}
+              onGoToMonthly={() => setActiveTab('monthly')}
+              onCheckInPlan={handleCheckInPlan}
+              onCreateSession={handleCreateNewSession}
             />
           )}
 
@@ -170,7 +184,10 @@ export default function App() {
               settings={bootstrap.settings}
               onRefreshAll={refreshAll}
               onCheckInPlan={handleCheckInPlan}
-              onCreateDrinkingOnDate={(d) => handleCreateNewSession('DRINKING', d)}
+              onCreateAdhocBadmintonOnDate={(d) =>
+                handleCreateNewSession('BADMINTON', { date: d, isAdhoc: true })
+              }
+              onCreateDrinkingOnDate={(d) => handleCreateNewSession('DRINKING', { date: d })}
             />
           )}
 
@@ -201,16 +218,22 @@ export default function App() {
 
           {activeTab === 'create' && isEditor && bootstrap && (
             <CreateSessionPage
-              key={editingSession?.session_id || prefillPlan?.plan_id || `${createInitialType}-${createInitialDate || 'new'}`}
+              key={
+                editingSession?.session_id ||
+                prefillPlan?.plan_id ||
+                `${createInitialType}-${createInitialDate || 'new'}-${createInitialAdhoc ? 'adhoc' : 'std'}`
+              }
               members={bootstrap.members}
               settings={bootstrap.settings}
               editingSession={editingSession}
               prefillPlan={prefillPlan}
               initialType={createInitialType}
               initialDate={createInitialDate}
+              initialAdhoc={createInitialAdhoc}
               onCancelEdit={() => {
                 setEditingSession(null);
                 setPrefillPlan(null);
+                setCreateInitialAdhoc(false);
                 setActiveTab(prefillPlan ? 'calendar' : 'debts');
               }}
               onSaved={async () => {
@@ -218,6 +241,7 @@ export default function App() {
                 const cameFromPlan = Boolean(prefillPlan);
                 setEditingSession(null);
                 setPrefillPlan(null);
+                setCreateInitialAdhoc(false);
                 setActiveTab(cameFromPlan ? 'calendar' : 'debts');
               }}
             />

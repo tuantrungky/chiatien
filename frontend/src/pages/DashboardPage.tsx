@@ -3,11 +3,16 @@ import {
   AlertCircle,
   ArrowRight,
   BarChart3,
+  CalendarDays,
+  CheckCircle2,
+  HelpCircle,
   PieChart as PieChartIcon,
+  Plus,
   QrCode,
   Sparkles,
   Trophy,
   Utensils,
+  Wallet,
 } from 'lucide-react';
 import {
   Bar,
@@ -24,15 +29,25 @@ import {
 } from 'recharts';
 import { PeriodFilterBar } from '../components/PeriodFilterBar';
 import type { VietQRModalData } from '../components/VietQRModal';
+import { useAuth } from '../contexts/AuthContext';
 import type {
   BootstrapData,
   DashboardData,
+  MonthlyBillData,
   PeriodType,
+  ScheduleData,
+  ScheduleDay,
   SeparatedDebtsData,
   Session,
+  SessionType,
   SimplifiedDebtResult,
 } from '../types';
-import { filterByPeriod, formatDateVN, formatShortDateVN } from '../utils/dateFilters';
+import {
+  filterByPeriod,
+  formatDateVN,
+  formatShortDateVN,
+  getTodayDateStr,
+} from '../utils/dateFilters';
 import { formatVND } from '../utils/vietqr';
 
 interface DashboardPageProps {
@@ -44,9 +59,23 @@ interface DashboardPageProps {
   dashboard: DashboardData | null;
   sessions: Session[];
   debts: SeparatedDebtsData | null;
+  schedule: ScheduleData | null;
+  monthlyBill: MonthlyBillData | null;
   simplifiedDrinkingDebts: SimplifiedDebtResult;
   onOpenQr: (data: VietQRModalData) => void;
   onGoToDebts: () => void;
+  onGoToCalendar: () => void;
+  onGoToMonthly: () => void;
+  onCheckInPlan: (plan: ScheduleDay) => void;
+  onCreateSession: (type: SessionType, options?: { date?: string; isAdhoc?: boolean }) => void;
+}
+
+const WEEKDAY_VN = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+function getWeekdayLabel(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return '';
+  return WEEKDAY_VN[new Date(y, m - 1, d).getDay()] || '';
 }
 
 export function DashboardPage({
@@ -58,11 +87,19 @@ export function DashboardPage({
   dashboard,
   sessions,
   debts,
+  schedule,
+  monthlyBill,
   simplifiedDrinkingDebts,
   onOpenQr,
   onGoToDebts,
+  onGoToCalendar,
+  onGoToMonthly,
+  onCheckInPlan,
+  onCreateSession,
 }: DashboardPageProps) {
+  const { isEditor } = useAuth();
   const [chartMode, setChartMode] = useState<'BAR' | 'PIE'>('BAR');
+  const [showFormula, setShowFormula] = useState<boolean>(false);
 
   const treasurer = useMemo(
     () =>
@@ -77,25 +114,68 @@ export function DashboardPage({
     [sessions, periodType, refDate]
   );
 
+  const badmintonPeriodSessions = useMemo(
+    () => periodSessions.filter((s) => s.type === 'BADMINTON'),
+    [periodSessions]
+  );
+  const fixedCountInPeriod = useMemo(
+    () => badmintonPeriodSessions.filter((s) => s.billing_mode !== 'AD_HOC').length,
+    [badmintonPeriodSessions]
+  );
+  const adhocCountInPeriod = useMemo(
+    () => badmintonPeriodSessions.filter((s) => s.billing_mode === 'AD_HOC').length,
+    [badmintonPeriodSessions]
+  );
   const badmintonCostInPeriod = useMemo(
-    () =>
-      periodSessions
-        .filter((s) => s.type === 'BADMINTON')
-        .reduce((sum, s) => sum + s.total_amount, 0),
-    [periodSessions]
+    () => badmintonPeriodSessions.reduce((sum, s) => sum + s.total_amount, 0),
+    [badmintonPeriodSessions]
   );
 
+  const drinkingPeriodSessions = useMemo(
+    () => periodSessions.filter((s) => s.type === 'DRINKING'),
+    [periodSessions]
+  );
   const drinkingCostInPeriod = useMemo(
-    () =>
-      periodSessions
-        .filter((s) => s.type === 'DRINKING')
-        .reduce((sum, s) => sum + s.total_amount, 0),
-    [periodSessions]
+    () => drinkingPeriodSessions.reduce((sum, s) => sum + s.total_amount, 0),
+    [drinkingPeriodSessions]
   );
 
+  const adhocDues = debts?.badminton.adhocDues ?? [];
   const badmintonUnpaid = debts?.badminton.totalOutstanding ?? 0;
   const drinkingUnpaid = simplifiedDrinkingDebts.totalOutstanding;
-  const projectedCarryOut = dashboard?.badminton.projectedCarryOut ?? 0;
+
+  // Thông tin Bù trừ Cầu lông tháng hiện hành
+  const bill = monthlyBill?.bill;
+  const dues = monthlyBill?.dues || [];
+  const currentMonth = monthlyBill?.month || dashboard?.currentMonth || refDate.slice(0, 7);
+  const monthLabel = `${currentMonth.slice(5, 7)}/${currentMonth.slice(0, 4)}`;
+  const monthlyBillIssued =
+    dashboard?.badminton.monthlyBillIssued ?? (dues.length > 0 || (bill?.billed_total ?? 0) > 0);
+  const carryIn = bill?.carry_in ?? dashboard?.badminton.carryIn ?? 0;
+  const billedTotal = bill?.billed_total ?? dashboard?.badminton.billedTotal ?? 0;
+  const guestIncome = bill?.guest_income ?? dashboard?.badminton.guestIncomeInMonth ?? 0;
+  const actualCost = bill?.actual_cost ?? dashboard?.badminton.actualCost ?? 0;
+  const projectedCarryOut = bill?.carry_out ?? dashboard?.badminton.projectedCarryOut ?? 0;
+  const perMember = bill?.per_member ?? dashboard?.badminton.perMember ?? 0;
+  const paidMembersCount =
+    dues.length > 0
+      ? dues.filter((d) => d.is_paid).length
+      : dashboard?.badminton.paidMembersCount ?? 0;
+  const totalMembersCount =
+    dues.length > 0 ? dues.length : dashboard?.badminton.totalMembersCount ?? 0;
+  const paidProgressPct =
+    totalMembersCount > 0 ? Math.round((paidMembersCount / totalMembersCount) * 100) : 0;
+
+  // 3 ngày đánh cầu sắp tới từ hôm nay
+  const todayStr = getTodayDateStr();
+  const upcomingPlans = useMemo(
+    () =>
+      (schedule?.days || [])
+        .filter((d) => d.status === 'PLANNED' && d.date >= todayStr)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(0, 3),
+    [schedule, todayStr]
+  );
 
   const barChartData = useMemo(() => {
     const groupByMonth = periodType === 'QUARTER' || periodType === 'YEAR';
@@ -129,6 +209,15 @@ export function DashboardPage({
     [badmintonCostInPeriod, drinkingCostInPeriod]
   );
 
+  const recentSessions = useMemo(
+    () =>
+      (dashboard?.recentSessions && dashboard.recentSessions.length > 0
+        ? dashboard.recentSessions
+        : [...sessions].sort((a, b) => b.date.localeCompare(a.date))
+      ).slice(0, 5),
+    [dashboard, sessions]
+  );
+
   const formatCompactAxis = (v: number) => {
     if (v >= 1000000) return `${(v / 1000000).toFixed(1)}tr`;
     if (v >= 1000) return `${Math.round(v / 1000)}k`;
@@ -137,6 +226,50 @@ export function DashboardPage({
 
   return (
     <div className="space-y-4">
+      {/* Thanh Thao tác nhanh cho Editor */}
+      {isEditor && (
+        <section className="bg-white rounded-2xl border border-emerald-200/80 p-3 shadow-xs space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-700">Thao tác nhanh của Editor</span>
+            <div className="flex items-center gap-2 text-[11px] font-semibold">
+              <button
+                type="button"
+                onClick={onGoToCalendar}
+                className="text-sky-700 hover:underline cursor-pointer"
+              >
+                Lịch tháng
+              </button>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={onGoToMonthly}
+                className="text-emerald-700 hover:underline cursor-pointer"
+              >
+                Chia tiền tháng
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onCreateSession('BADMINTON')}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-xs active:scale-[0.99] transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span>Thêm buổi Cầu lông</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onCreateSession('DRINKING')}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs sm:text-sm font-bold shadow-xs active:scale-[0.99] transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span>Thêm buổi Ăn nhậu</span>
+            </button>
+          </div>
+        </section>
+      )}
+
       <PeriodFilterBar
         periodType={periodType}
         refDate={refDate}
@@ -144,57 +277,86 @@ export function DashboardPage({
         onChangeRefDate={onChangeRefDate}
       />
 
-      {/* 4 Thẻ chỉ số nhanh (không còn Số dư Quỹ) */}
+      {/* 4 Thẻ chỉ số nhanh (KPI) */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-2xl p-3.5 shadow-sm">
           <div className="flex items-center justify-between text-emerald-100 text-xs font-medium mb-1.5">
             <span>Chi Cầu lông (kỳ)</span>
-            <Trophy className="w-4 h-4" />
+            <Trophy className="w-4 h-4 shrink-0" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold tracking-tight">
             {formatVND(badmintonCostInPeriod)}
           </p>
           <p className="text-[11px] text-emerald-100/90 mt-1">
-            {periodSessions.filter((s) => s.type === 'BADMINTON').length} buổi • VL thu:{' '}
-            {formatVND(dashboard?.badminton.guestIncomeInMonth ?? 0)}
+            {fixedCountInPeriod} cố định • {adhocCountInPeriod} phát sinh
           </p>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
             <span>Chi Ăn nhậu (kỳ)</span>
-            <Utensils className="w-4 h-4 text-orange-500" />
+            <Utensils className="w-4 h-4 text-orange-500 shrink-0" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold text-slate-900">
             {formatVND(drinkingCostInPeriod)}
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            {periodSessions.filter((s) => s.type === 'DRINKING').length} buổi ăn nhậu
+            {drinkingPeriodSessions.length} buổi ăn nhậu
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
-            <span>Dư cầu sang T.sau</span>
-            <Sparkles className="w-4 h-4 text-blue-600" />
+        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5 gap-1">
+              <span className="truncate">Bù trừ Cầu T.{monthLabel}</span>
+              <button
+                type="button"
+                onClick={() => setShowFormula((v) => !v)}
+                aria-label="Xem công thức bù trừ cầu sang tháng sau"
+                className="inline-flex items-center gap-0.5 text-[10px] font-bold text-blue-600 hover:text-blue-700 shrink-0 cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Công thức</span>
+              </button>
+            </div>
+
+            {!monthlyBillIssued ? (
+              <>
+                <p className="text-base sm:text-lg font-extrabold text-amber-700">
+                  Chưa chia tháng
+                </p>
+                <button
+                  type="button"
+                  onClick={onGoToMonthly}
+                  className="text-[11px] text-emerald-700 font-semibold hover:underline mt-1 text-left cursor-pointer"
+                >
+                  Vào Tháng cầu để chia →
+                </button>
+              </>
+            ) : (
+              <>
+                <p
+                  className={`text-lg sm:text-xl font-extrabold ${
+                    projectedCarryOut >= 0 ? 'text-blue-700' : 'text-rose-600'
+                  }`}
+                >
+                  {projectedCarryOut >= 0 ? 'Dư +' : 'Thiếu '}
+                  {formatVND(projectedCarryOut)}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {projectedCarryOut >= 0
+                    ? 'Tháng sau mỗi người đóng ít đi'
+                    : 'Tháng sau chia bù phần thiếu'}
+                </p>
+              </>
+            )}
           </div>
-          <p
-            className={`text-lg sm:text-xl font-extrabold ${
-              projectedCarryOut >= 0 ? 'text-blue-700' : 'text-rose-600'
-            }`}
-          >
-            {projectedCarryOut >= 0 ? '+' : ''}
-            {formatVND(projectedCarryOut)}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            Tháng {dashboard?.currentMonth.slice(5, 7)}/{dashboard?.currentMonth.slice(0, 4)}
-          </p>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1.5">
             <span>Nợ chưa thu</span>
-            <AlertCircle className="w-4 h-4 text-rose-500" />
+            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold text-rose-600">
             {formatVND(badmintonUnpaid + drinkingUnpaid)}
@@ -205,14 +367,204 @@ export function DashboardPage({
         </div>
       </section>
 
-      {/* Khối 1: Nợ Cầu lông (Thẳng Thủ quỹ) */}
+      {/* Hộp giải thích công thức Bù trừ Cầu sang tháng sau */}
+      {showFormula && (
+        <section className="bg-blue-50/80 border border-blue-200 rounded-2xl p-4 text-xs text-slate-700 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 font-bold text-blue-950">
+              <Sparkles className="w-4 h-4 text-blue-600" />
+              <span>Cách tính tiền Cầu lông chuyển sang tháng sau (Tháng {monthLabel})</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowFormula(false)}
+              className="text-blue-700 font-semibold hover:underline cursor-pointer"
+            >
+              Ẩn
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+            <div className="bg-white rounded-xl p-2 border border-blue-100">
+              <p className="text-[10px] text-slate-500">Kỳ trước chuyển sang</p>
+              <p className="font-bold text-slate-900 mt-0.5">{formatVND(carryIn)}</p>
+            </div>
+            <div className="bg-white rounded-xl p-2 border border-blue-100">
+              <p className="text-[10px] text-slate-500">+ Đã chia MAIN</p>
+              <p className="font-bold text-emerald-700 mt-0.5">+{formatVND(billedTotal)}</p>
+            </div>
+            <div className="bg-white rounded-xl p-2 border border-blue-100">
+              <p className="text-[10px] text-slate-500">+ Vãng lai đã thu</p>
+              <p className="font-bold text-emerald-700 mt-0.5">+{formatVND(guestIncome)}</p>
+            </div>
+            <div className="bg-white rounded-xl p-2 border border-blue-100">
+              <p className="text-[10px] text-slate-500">− Chi buổi cố định</p>
+              <p className="font-bold text-rose-600 mt-0.5">−{formatVND(actualCost)}</p>
+            </div>
+            <div className="bg-blue-600 text-white rounded-xl p-2 col-span-2 sm:col-span-1">
+              <p className="text-[10px] text-blue-100">= Chuyển tháng sau</p>
+              <p className="font-extrabold mt-0.5">
+                {projectedCarryOut >= 0 ? '+' : ''}
+                {formatVND(projectedCarryOut)}
+              </p>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            <strong>Ý nghĩa:</strong> Nếu kết quả <strong>Dư (+)</strong> (nhờ thu thêm vãng lai hoặc
+            đánh ít hơn dự toán), tháng sau mỗi thành viên chính sẽ đóng ít đi phần dư này. Nếu{' '}
+            <strong>Thiếu (−)</strong>, tháng sau sẽ cộng bù vào dự toán để chia đều.{' '}
+            <em>(Các buổi cầu phát sinh đã chia riêng từng buổi nên không tính vào đây.)</em>
+          </p>
+        </section>
+      )}
+
+      {/* Khối Tiến độ Tháng Cầu & Lịch đánh sắp tới */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Card 1: Tiến độ đóng tiền Cầu tháng */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                <Wallet className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Tiến độ Cầu tháng {monthLabel}
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  {monthlyBillIssued
+                    ? `${formatVND(perMember)}/người • VL đã thu ${formatVND(guestIncome)}`
+                    : 'Chưa phát hành hóa đơn đầu tháng'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onGoToMonthly}
+              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer shrink-0"
+            >
+              Tháng cầu →
+            </button>
+          </div>
+
+          {!monthlyBillIssued ? (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 flex items-center justify-between gap-2">
+              <span>Chưa chia tiền sân cố định cho thành viên MAIN trong tháng {monthLabel}.</span>
+              {isEditor && (
+                <button
+                  type="button"
+                  onClick={onGoToMonthly}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold shrink-0 cursor-pointer"
+                >
+                  Chia ngay
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700">
+                  Đã đóng: {paidMembersCount}/{totalMembersCount} thành viên MAIN
+                </span>
+                <span className="font-bold text-emerald-700">{paidProgressPct}%</span>
+              </div>
+              <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className="h-full bg-emerald-600 rounded-full transition-all"
+                  style={{ width: `${paidProgressPct}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>Đã chia thu: {formatVND(billedTotal)}</span>
+                <span>Chi cố định T.{currentMonth.slice(5, 7)}: {formatVND(actualCost)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Card 2: Lịch đánh cầu sắp tới */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-sky-50 text-sky-700 flex items-center justify-center shrink-0">
+                <CalendarDays className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Lịch đánh cầu sắp tới</h2>
+                <p className="text-[11px] text-slate-500">Các buổi cố định tiếp theo từ hôm nay</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onGoToCalendar}
+              className="text-xs font-semibold text-sky-700 hover:text-sky-800 cursor-pointer shrink-0"
+            >
+              Mở Lịch →
+            </button>
+          </div>
+
+          {upcomingPlans.length === 0 ? (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-500 flex items-center justify-between gap-2">
+              <span>Chưa có lịch đánh cầu cố định nào sắp tới trong tháng {monthLabel}.</span>
+              {isEditor && (
+                <button
+                  type="button"
+                  onClick={onGoToCalendar}
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white font-bold shrink-0 cursor-pointer"
+                >
+                  Lập lịch
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {upcomingPlans.map((plan) => {
+                const plannedCount = plan.planned_member_ids
+                  ? plan.planned_member_ids.split(',').filter((x) => x.trim()).length
+                  : 0;
+                return (
+                  <div
+                    key={plan.plan_id}
+                    className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 border border-slate-200/80 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-900">
+                        {getWeekdayLabel(plan.date)}, {formatShortDateVN(plan.date)} • {plan.start_time}–
+                        {plan.end_time}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {plan.courts} sân • {plannedCount} người dự kiến
+                      </p>
+                    </div>
+                    {isEditor && (
+                      <button
+                        type="button"
+                        onClick={() => onCheckInPlan(plan)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Điểm danh</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Khối 1: Nợ Cầu lông (Tháng + Phát sinh + Vãng lai) */}
       <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-bold text-slate-900">
-              Cầu lông cần chuyển Thủ quỹ ({treasurer?.name || 'Thủ quỹ'})
+              Cầu lông cần chuyển khoản
             </h2>
-            <p className="text-xs text-slate-500">Hóa đơn tháng MAIN &amp; phí vãng lai</p>
+            <p className="text-xs text-slate-500">
+              Tiền tháng MAIN, cầu phát sinh &amp; phí vãng lai (tách riêng Ăn nhậu)
+            </p>
           </div>
           <button
             type="button"
@@ -224,7 +576,8 @@ export function DashboardPage({
         </div>
 
         {(debts?.badminton.monthlyDues.length ?? 0) === 0 &&
-        (debts?.badminton.guestDues.length ?? 0) === 0 ? (
+        (debts?.badminton.guestDues.length ?? 0) === 0 &&
+        adhocDues.length === 0 ? (
           <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
             Mọi thành viên &amp; vãng lai đã đóng đủ tiền Cầu lông!
           </div>
@@ -240,7 +593,7 @@ export function DashboardPage({
                     </span>
                   </div>
                   <p className="text-sm font-extrabold text-rose-600 mt-0.5">
-                    {formatVND(d.amount)}
+                    {formatVND(d.amount)} → {treasurer?.name || 'Thủ quỹ'}
                   </p>
                 </div>
                 <button
@@ -266,6 +619,42 @@ export function DashboardPage({
               </div>
             ))}
 
+            {adhocDues.map((a) => (
+              <div key={a.attendance_id} className="p-3.5 flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-sm text-slate-900">{a.member_name}</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                      Phát sinh {formatShortDateVN(a.session_date)}
+                    </span>
+                  </div>
+                  <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                    {formatVND(a.amount)} → {a.creditor_name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenQr({
+                      title: `${a.member_name} → ${a.creditor_name}`,
+                      subtitle: `${a.session_title} (${formatDateVN(a.session_date)})`,
+                      amount: a.amount,
+                      transferContent: a.transferContent,
+                      bankName: a.creditorBank?.bankName || '',
+                      bankBin: a.creditorBank?.bankBin || '',
+                      accountNo: a.creditorBank?.accountNo || '',
+                      accountName: a.creditorBank?.accountName || '',
+                      vietQrUrl: a.vietQrUrl,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>VietQR</span>
+                </button>
+              </div>
+            ))}
+
             {debts?.badminton.guestDues.map((g) => (
               <div key={g.attendance_id} className="p-3.5 flex items-center justify-between gap-2.5">
                 <div className="min-w-0">
@@ -276,7 +665,7 @@ export function DashboardPage({
                     </span>
                   </div>
                   <p className="text-sm font-extrabold text-rose-600 mt-0.5">
-                    {formatVND(g.amount)}
+                    {formatVND(g.amount)} → {treasurer?.name || 'Thủ quỹ'}
                   </p>
                 </div>
                 <button
@@ -491,17 +880,26 @@ export function DashboardPage({
       {/* Buổi gần nhất */}
       <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-slate-900">Buổi gần nhất</h2>
-          <span className="text-xs text-slate-400">{periodSessions.length} buổi trong kỳ</span>
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">Buổi gần nhất</h2>
+            <p className="text-xs text-slate-400">{periodSessions.length} buổi trong kỳ đang chọn</p>
+          </div>
+          <button
+            type="button"
+            onClick={onGoToDebts}
+            className="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
+          >
+            Xem tất cả →
+          </button>
         </div>
-        {(dashboard?.recentSessions || []).length === 0 ? (
+        {recentSessions.length === 0 ? (
           <div className="p-6 text-center text-xs text-slate-400">Chưa có buổi chơi nào.</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {(dashboard?.recentSessions || []).slice(0, 5).map((s) => (
+            {recentSessions.map((s) => (
               <div key={s.session_id} className="px-4 py-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span
                       className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                         s.type === 'BADMINTON'
@@ -511,13 +909,21 @@ export function DashboardPage({
                     >
                       {s.type === 'BADMINTON' ? 'Cầu lông' : 'Ăn nhậu'}
                     </span>
+                    {s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                        Phát sinh
+                      </span>
+                    )}
                     <span className="text-xs text-slate-400">{formatDateVN(s.date)}</span>
                   </div>
                   <p className="text-sm font-semibold text-slate-900 truncate mt-1">{s.title}</p>
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-sm font-bold text-slate-900">{formatVND(s.total_amount)}</p>
-                  <p className="text-[11px] text-slate-500">{s.attendee_count} người</p>
+                  <p className="text-[11px] text-slate-500">
+                    {s.attendee_count} người
+                    {s.per_person_amount > 0 ? ` • ${formatVND(s.per_person_amount)}/ng` : ''}
+                  </p>
                 </div>
               </div>
             ))}

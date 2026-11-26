@@ -40,6 +40,7 @@ var SHEET_SCHEMA = {
     'cost_detail',
     'venue_type',
     'plan_id',
+    'billing_mode',
     'created_by',
     'created_at',
     'updated_at'
@@ -166,7 +167,8 @@ var TEXT_COLUMNS = {
   period: true,
   month: true,
   start_time: true,
-  end_time: true
+  end_time: true,
+  billing_mode: true
 };
 
 var DEFAULT_SETTINGS_ROWS = [
@@ -842,6 +844,9 @@ function getSessionsList(filters) {
       cost_detail: String(r.cost_detail || '').trim(),
       venue_type: String(r.venue_type || '').trim(),
       plan_id: String(r.plan_id || '').trim(),
+      billing_mode: sType === 'BADMINTON'
+        ? (String(r.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
+        : '',
       created_by: String(r.created_by || '').trim(),
       created_at: String(r.created_at || ''),
       updated_at: String(r.updated_at || '')
@@ -932,6 +937,14 @@ function getGuestStatsData(monthStr) {
     : todayDateStr_().slice(0, 7);
 
   var membersMap = buildMembersMap_(getMembersList(false));
+  var badSessions = getSessionsList({ type: 'BADMINTON' });
+  var adhocSessionSet = {};
+  for (var bs = 0; bs < badSessions.length; bs++) {
+    if (badSessions[bs].billing_mode === 'AD_HOC') {
+      adhocSessionSet[badSessions[bs].session_id] = true;
+    }
+  }
+
   var attRows = getSheetObjects_('Attendance');
   var byGuest = {};
 
@@ -945,7 +958,9 @@ function getGuestStatsData(monthStr) {
     var sDate = String(a.session_date || '').trim();
     var mType = String(a.member_type_snapshot || '').trim().toUpperCase();
     var sType = String(a.session_type || '').trim().toUpperCase();
+    var sId = String(a.session_id || '').trim();
     if (mType !== 'GUEST' || sType !== 'BADMINTON' || sDate.slice(0, 7) !== targetMonth) continue;
+    if (adhocSessionSet[sId]) continue;
 
     var mId = String(a.member_id || '').trim();
     var fee = toInt_(a.fee_amount, 0);
@@ -1069,6 +1084,8 @@ function computeDebtsData() {
   var attRows = getSheetObjects_('Attendance');
   var guestDues = [];
   var totalGuestUnpaid = 0;
+  var adhocDues = [];
+  var totalAdhocUnpaid = 0;
   var drinkingUnpaidAttendances = [];
   var drinkingNetMap = {};
   var ensureDrinker = function (id) {
@@ -1082,12 +1099,50 @@ function computeDebtsData() {
     var mId = String(a.member_id || '').trim();
 
     if (sType === 'BADMINTON') {
-      if (String(a.member_type_snapshot || '').toUpperCase() !== 'GUEST') continue;
+      var bSessionId = String(a.session_id || '').trim();
+      var gSession = sessionsMap[bSessionId];
+      var isAdhoc = gSession && gSession.billing_mode === 'AD_HOC';
       var gFee = toInt_(a.fee_amount, 0);
       if (gFee <= 0) continue;
+
       var gName = membersMap[mId] ? membersMap[mId].name : mId;
       var sDate = String(a.session_date || '').trim();
-      var gSession = sessionsMap[String(a.session_id || '').trim()];
+
+      if (isAdhoc) {
+        var adhocCreditorId = String(a.creditor_id || (gSession && gSession.payer_id) || treasurerId).trim();
+        var adhocCreditor = membersMap[adhocCreditorId] || treasurer;
+        var adhocCreditorBank = (adhocCreditor && adhocCreditor.bank_bin && adhocCreditor.account_no)
+          ? {
+              bankBin: adhocCreditor.bank_bin,
+              bankName: adhocCreditor.bank_name,
+              accountNo: adhocCreditor.account_no,
+              accountName: adhocCreditor.account_name || adhocCreditor.name
+            }
+          : null;
+        var aContent = stripVietnameseDiacritics_(
+          settings.transfer_prefix + ' ' + gName + ' cau ps ' + sDate.slice(8, 10) + '/' + sDate.slice(5, 7)
+        ).slice(0, 50);
+
+        totalAdhocUnpaid += gFee;
+        adhocDues.push({
+          attendance_id: String(a.attendance_id || '').trim(),
+          session_id: bSessionId,
+          session_date: sDate,
+          session_title: gSession ? gSession.title : 'Cầu lông phát sinh',
+          member_id: mId,
+          member_name: gName,
+          member_type_snapshot: String(a.member_type_snapshot || 'MAIN').trim().toUpperCase(),
+          creditor_id: adhocCreditorId,
+          creditor_name: adhocCreditor ? adhocCreditor.name : adhocCreditorId,
+          creditorBank: adhocCreditorBank,
+          amount: gFee,
+          transferContent: aContent,
+          vietQrUrl: buildVietQrUrl_(adhocCreditor, gFee, aContent, settings.vietqr_template)
+        });
+        continue;
+      }
+
+      if (String(a.member_type_snapshot || '').toUpperCase() !== 'GUEST') continue;
       var gContent = stripVietnameseDiacritics_(
         settings.transfer_prefix + ' ' + gName + ' san ' + sDate.slice(8, 10) + '/' + sDate.slice(5, 7)
       ).slice(0, 50);
@@ -1095,7 +1150,7 @@ function computeDebtsData() {
       totalGuestUnpaid += gFee;
       guestDues.push({
         attendance_id: String(a.attendance_id || '').trim(),
-        session_id: String(a.session_id || '').trim(),
+        session_id: bSessionId,
         session_date: sDate,
         session_title: gSession ? gSession.title : 'Cầu lông',
         member_id: mId,
@@ -1251,9 +1306,11 @@ function computeDebtsData() {
       treasurerBank: treasurerBank,
       monthlyDues: monthlyDues,
       guestDues: guestDues,
+      adhocDues: adhocDues,
       totalMonthlyUnpaid: totalMonthlyUnpaid,
       totalGuestUnpaid: totalGuestUnpaid,
-      totalOutstanding: totalMonthlyUnpaid + totalGuestUnpaid
+      totalAdhocUnpaid: totalAdhocUnpaid,
+      totalOutstanding: totalMonthlyUnpaid + totalGuestUnpaid + totalAdhocUnpaid
     },
     drinking: {
       netBalances: netBalances,
@@ -1444,15 +1501,23 @@ function getMonthlyBillData(monthStr) {
     if (bMonth === prevMonth) prevBillRow = b;
   }
 
-  var sessionsInMonth = getSessionsList({ type: 'BADMINTON' }).filter(function (s) {
-    return s.date.slice(0, 7) === targetMonth;
+  var allBadmintonSessions = getSessionsList({ type: 'BADMINTON' });
+  var adhocSessionSet = {};
+  for (var abs = 0; abs < allBadmintonSessions.length; abs++) {
+    if (allBadmintonSessions[abs].billing_mode === 'AD_HOC') {
+      adhocSessionSet[allBadmintonSessions[abs].session_id] = true;
+    }
+  }
+
+  var sessionsInMonth = allBadmintonSessions.filter(function (s) {
+    return s.date.slice(0, 7) === targetMonth && s.billing_mode !== 'AD_HOC';
   });
   var sessionsTotal = 0;
   for (var si = 0; si < sessionsInMonth.length; si++) {
     sessionsTotal += sessionsInMonth[si].total_amount;
   }
 
-  // Tính phí vãng lai đã thu trong tháng targetMonth
+  // Tính phí vãng lai đã thu trong tháng targetMonth (chỉ tính buổi cố định MONTHLY)
   var attRows = getSheetObjects_('Attendance');
   var guestPaidCount = 0;
   var guestPaidAmount = 0;
@@ -1460,6 +1525,7 @@ function getMonthlyBillData(monthStr) {
   for (var ai = 0; ai < attRows.length; ai++) {
     var a = attRows[ai];
     if (String(a.session_type || '').toUpperCase() !== 'BADMINTON') continue;
+    if (adhocSessionSet[String(a.session_id || '').trim()]) continue;
     if (String(a.member_type_snapshot || '').toUpperCase() !== 'GUEST') continue;
     var fee = toInt_(a.fee_amount, 0);
     if (fee <= 0) continue;
@@ -1751,6 +1817,8 @@ function getDashboardData(periodType, refDate) {
 
   var badPeriodCost = 0;
   var badSessionCount = 0;
+  var fixedSessionCount = 0;
+  var adhocSessionCount = 0;
   var drinkPeriodCost = 0;
   var drinkSessionCount = 0;
 
@@ -1761,10 +1829,17 @@ function getDashboardData(periodType, refDate) {
     if (s.type === 'BADMINTON') {
       badPeriodCost += s.total_amount;
       badSessionCount++;
+      if (s.billing_mode === 'AD_HOC') adhocSessionCount++;
+      else fixedSessionCount++;
     } else if (s.type === 'DRINKING') {
       drinkPeriodCost += s.total_amount;
       drinkSessionCount++;
     }
+  }
+
+  var paidMembersCount = 0;
+  for (var di = 0; di < monthlyBill.dues.length; di++) {
+    if (monthlyBill.dues[di].is_paid) paidMembersCount++;
   }
 
   return {
@@ -1773,10 +1848,20 @@ function getDashboardData(periodType, refDate) {
     badminton: {
       periodCost: badPeriodCost,
       sessionCount: badSessionCount,
+      fixedSessionCount: fixedSessionCount,
+      adhocSessionCount: adhocSessionCount,
       guestIncomeInMonth: monthlyBill.bill.guest_income,
       carryIn: monthlyBill.bill.carry_in,
       projectedCarryOut: monthlyBill.bill.carry_out,
-      unpaidTotal: debts.badminton.totalOutstanding
+      unpaidTotal: debts.badminton.totalOutstanding,
+      monthlyBillIssued: monthlyBill.dues.length > 0 || monthlyBill.bill.billed_total > 0,
+      monthlyBillStatus: monthlyBill.bill.status,
+      estimate: monthlyBill.bill.estimate,
+      billedTotal: monthlyBill.bill.billed_total,
+      actualCost: monthlyBill.bill.actual_cost,
+      perMember: monthlyBill.bill.per_member,
+      paidMembersCount: paidMembersCount,
+      totalMembersCount: monthlyBill.dues.length
     },
     drinking: {
       periodCost: drinkPeriodCost,
@@ -2029,33 +2114,68 @@ function createSessionRecord(payload, editorEmail) {
   var shuttleAmount = Math.max(0, toInt_(p.shuttleAmount !== undefined ? p.shuttleAmount : p.shuttle_amount, 0));
   var otherAmount = Math.max(0, toInt_(p.otherAmount !== undefined ? p.otherAmount : p.other_amount, 0));
   var costDetailStr = p.costDetail ? JSON.stringify(p.costDetail) : String(p.cost_detail || '').trim();
+  var billingMode = sessionType === 'BADMINTON'
+    ? (String(p.billingMode || p.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
+    : '';
   var venueType = sessionType === 'DRINKING' ? String(p.venueType || p.venue_type || 'RESTAURANT').trim().toUpperCase() : '';
+  var unit = settings.rounding_unit || 1000;
 
   if (sessionType === 'BADMINTON') {
-    for (var i = 0; i < attendeeIds.length; i++) {
-      var mId = attendeeIds[i];
-      var member = membersMap[mId];
-      if (!member) throw createAppError_('NOT_FOUND', 'Không tìm thấy thành viên ' + mId);
-      var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
-      var fee = mType === 'GUEST' ? guestFee : 0;
-      var isPaid = mType === 'MAIN' || Boolean(guestRes.paidImmediatelySet[mId]) || fee === 0;
+    if (billingMode === 'AD_HOC') {
+      perPersonAmount = (attendeeIds.length > 0 && totalAmount > 0)
+        ? Math.ceil(totalAmount / attendeeIds.length / unit) * unit
+        : 0;
+      payerId = String(p.payerId || p.payer_id || treasurerId || '').trim();
+      for (var i = 0; i < attendeeIds.length; i++) {
+        var mId = attendeeIds[i];
+        var member = membersMap[mId];
+        if (!member) throw createAppError_('NOT_FOUND', 'Không tìm thấy thành viên ' + mId);
+        var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
+        var isPaid = (mId === payerId) || Boolean(guestRes.paidImmediatelySet[mId]) || perPersonAmount === 0;
 
-      attendanceRows.push({
-        attendance_id: generateId_('ATT') + '_' + i,
-        session_id: sessionId,
-        session_date: dateStr,
-        session_type: 'BADMINTON',
-        member_id: mId,
-        member_type_snapshot: mType,
-        fee_amount: fee,
-        creditor_id: treasurerId || payerId,
-        contributed_amount: 0,
-        net_amount: isPaid ? 0 : fee,
-        is_paid: isPaid,
-        paid_at: isPaid ? now : '',
-        settlement_id: '',
-        note: ''
-      });
+        attendanceRows.push({
+          attendance_id: generateId_('ATT') + '_' + i,
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_type_snapshot: mType,
+          fee_amount: perPersonAmount,
+          creditor_id: payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : perPersonAmount,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: ''
+        });
+      }
+    } else {
+      for (var i = 0; i < attendeeIds.length; i++) {
+        var mId = attendeeIds[i];
+        var member = membersMap[mId];
+        if (!member) throw createAppError_('NOT_FOUND', 'Không tìm thấy thành viên ' + mId);
+        var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
+        var fee = mType === 'GUEST' ? guestFee : 0;
+        var isPaid = mType === 'MAIN' || Boolean(guestRes.paidImmediatelySet[mId]) || fee === 0;
+
+        attendanceRows.push({
+          attendance_id: generateId_('ATT') + '_' + i,
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_type_snapshot: mType,
+          fee_amount: fee,
+          creditor_id: treasurerId || payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : fee,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: ''
+        });
+      }
     }
   } else {
     var split = buildDrinkingSplitRows_(
@@ -2065,7 +2185,7 @@ function createSessionRecord(payload, editorEmail) {
       p.items,
       payerId,
       totalAmount,
-      settings.rounding_unit || 1000,
+      unit,
       membersMap,
       now
     );
@@ -2085,8 +2205,8 @@ function createSessionRecord(payload, editorEmail) {
     type: sessionType,
     title: title,
     total_amount: totalAmount,
-    guest_fee: sessionType === 'BADMINTON' ? guestFee : 0,
-    payer_id: sessionType === 'BADMINTON' ? (treasurerId || payerId) : payerId,
+    guest_fee: (sessionType === 'BADMINTON' && billingMode === 'MONTHLY') ? guestFee : 0,
+    payer_id: (sessionType === 'BADMINTON' && billingMode === 'MONTHLY') ? (treasurerId || payerId) : payerId,
     per_person_amount: perPersonAmount,
     attendee_count: attendeeCount,
     receipt_drive_id: String(p.receiptDriveId || p.receipt_drive_id || '').trim(),
@@ -2100,6 +2220,7 @@ function createSessionRecord(payload, editorEmail) {
     cost_detail: sessionType === 'BADMINTON' ? costDetailStr : '',
     venue_type: venueType,
     plan_id: planId,
+    billing_mode: billingMode,
     created_by: editorEmail,
     created_at: now,
     updated_at: now
@@ -2192,32 +2313,65 @@ function updateSessionRecord(payload, editorEmail) {
   var shuttleAmount = Math.max(0, toInt_(p.shuttleAmount !== undefined ? p.shuttleAmount : p.shuttle_amount, oldSession.shuttle_amount));
   var otherAmount = Math.max(0, toInt_(p.otherAmount !== undefined ? p.otherAmount : p.other_amount, oldSession.other_amount));
   var costDetailStr = p.costDetail ? JSON.stringify(p.costDetail) : (p.cost_detail !== undefined ? String(p.cost_detail) : oldSession.cost_detail);
+  var billingMode = sessionType === 'BADMINTON'
+    ? (String(p.billingMode || p.billing_mode || oldSession.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
+    : '';
   var venueType = sessionType === 'DRINKING' ? String(p.venueType || p.venue_type || oldSession.venue_type || 'RESTAURANT').trim().toUpperCase() : '';
+  var unit = settings.rounding_unit || 1000;
 
   if (sessionType === 'BADMINTON') {
-    for (var i = 0; i < attendeeIds.length; i++) {
-      var mId = attendeeIds[i];
-      var member = membersMap[mId];
-      if (!member) continue;
-      var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
-      var fee = mType === 'GUEST' ? guestFee : 0;
-      var isPaid = mType === 'MAIN' || Boolean(guestRes.paidImmediatelySet[mId]) || fee === 0;
-      attendanceRows.push({
-        attendance_id: generateId_('ATT') + '_U_' + i,
-        session_id: sessionId,
-        session_date: dateStr,
-        session_type: 'BADMINTON',
-        member_id: mId,
-        member_type_snapshot: mType,
-        fee_amount: fee,
-        creditor_id: treasurerId || payerId,
-        contributed_amount: 0,
-        net_amount: isPaid ? 0 : fee,
-        is_paid: isPaid,
-        paid_at: isPaid ? now : '',
-        settlement_id: '',
-        note: ''
-      });
+    if (billingMode === 'AD_HOC') {
+      perPersonAmount = (attendeeIds.length > 0 && totalAmount > 0)
+        ? Math.ceil(totalAmount / attendeeIds.length / unit) * unit
+        : 0;
+      for (var i = 0; i < attendeeIds.length; i++) {
+        var mId = attendeeIds[i];
+        var member = membersMap[mId];
+        if (!member) continue;
+        var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
+        var isPaid = (mId === payerId) || Boolean(guestRes.paidImmediatelySet[mId]) || perPersonAmount === 0;
+        attendanceRows.push({
+          attendance_id: generateId_('ATT') + '_U_' + i,
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_type_snapshot: mType,
+          fee_amount: perPersonAmount,
+          creditor_id: payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : perPersonAmount,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: ''
+        });
+      }
+    } else {
+      for (var i = 0; i < attendeeIds.length; i++) {
+        var mId = attendeeIds[i];
+        var member = membersMap[mId];
+        if (!member) continue;
+        var mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
+        var fee = mType === 'GUEST' ? guestFee : 0;
+        var isPaid = mType === 'MAIN' || Boolean(guestRes.paidImmediatelySet[mId]) || fee === 0;
+        attendanceRows.push({
+          attendance_id: generateId_('ATT') + '_U_' + i,
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_type_snapshot: mType,
+          fee_amount: fee,
+          creditor_id: treasurerId || payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : fee,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: ''
+        });
+      }
     }
   } else {
     var split = buildDrinkingSplitRows_(
@@ -2227,7 +2381,7 @@ function updateSessionRecord(payload, editorEmail) {
       p.items,
       payerId,
       totalAmount,
-      settings.rounding_unit || 1000,
+      unit,
       membersMap,
       now
     );
@@ -2257,8 +2411,8 @@ function updateSessionRecord(payload, editorEmail) {
       row.type = sessionType;
       row.title = title;
       row.total_amount = totalAmount;
-      row.guest_fee = sessionType === 'BADMINTON' ? guestFee : 0;
-      row.payer_id = payerId;
+      row.guest_fee = (sessionType === 'BADMINTON' && billingMode === 'MONTHLY') ? guestFee : 0;
+      row.payer_id = (sessionType === 'BADMINTON' && billingMode === 'MONTHLY') ? (treasurerId || payerId) : payerId;
       row.per_person_amount = perPersonAmount;
       row.attendee_count = attendeeCount;
       row.receipt_drive_id = p.receiptDriveId !== undefined ? String(p.receiptDriveId) : row.receipt_drive_id;
@@ -2271,6 +2425,7 @@ function updateSessionRecord(payload, editorEmail) {
       row.other_amount = sessionType === 'BADMINTON' ? otherAmount : 0;
       row.cost_detail = sessionType === 'BADMINTON' ? costDetailStr : '';
       row.venue_type = venueType;
+      row.billing_mode = billingMode;
       row.updated_at = now;
       updatedSession = row;
       return row;
@@ -2359,6 +2514,7 @@ function confirmPaymentRecord(payload, editorEmail) {
       },
       function (row) {
         paidSum += toInt_(row.fee_amount, 0);
+        row.net_amount = 0;
         row.is_paid = true;
         row.paid_at = now;
         row.settlement_id = settlementId;

@@ -1,13 +1,16 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ArrowRightLeft,
   CalendarDays,
   LayoutDashboard,
+  Plus,
   RefreshCw,
   Settings,
   ShieldCheck,
   Trophy,
+  Utensils,
   Wallet,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { IS_MOCK_MODE } from '../services/api';
@@ -19,6 +22,7 @@ export type ActiveTab = 'dashboard' | 'calendar' | 'debts' | 'monthly' | 'create
 interface LayoutProps {
   activeTab: ActiveTab;
   onChangeTab: (tab: ActiveTab) => void;
+  onCreateSession: (type: 'BADMINTON' | 'DRINKING') => void;
   clubName: string;
   treasurer?: Member;
   refreshing: boolean;
@@ -81,6 +85,7 @@ function formatSyncTime(ts: number | null): string {
 export function Layout({
   activeTab,
   onChangeTab,
+  onCreateSession,
   clubName,
   treasurer,
   refreshing,
@@ -90,7 +95,18 @@ export function Layout({
   children,
 }: LayoutProps) {
   const { isEditor } = useAuth();
+  const [fabOpen, setFabOpen] = useState(false);
   const navItems = ALL_NAV_ITEMS.filter((item) => !item.editorOnly || isEditor);
+
+  const handleSelectTab = (tab: ActiveTab) => {
+    setFabOpen(false);
+    onChangeTab(tab);
+  };
+
+  const handleTriggerCreate = (type: 'BADMINTON' | 'DRINKING') => {
+    setFabOpen(false);
+    onCreateSession(type);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col md:flex-row">
@@ -116,6 +132,32 @@ export function Layout({
           </div>
         </div>
 
+        {isEditor && (
+          <div className="p-3 pb-1 border-b border-slate-100">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1 mb-2">
+              Tạo buổi nhanh
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleTriggerCreate('BADMINTON')}
+                className="flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Buổi cầu</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTriggerCreate('DRINKING')}
+                className="flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Ăn nhậu</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <nav className="flex-1 p-3 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -124,7 +166,7 @@ export function Layout({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => onChangeTab(item.id)}
+                onClick={() => handleSelectTab(item.id)}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
                   isActive
                     ? 'bg-emerald-50 text-emerald-700'
@@ -220,6 +262,63 @@ export function Layout({
         </main>
       </div>
 
+      {/* Mobile Floating Action Button (Editor) */}
+      {isEditor && activeTab !== 'create' && (
+        <>
+          {fabOpen && (
+            <div
+              className="md:hidden fixed inset-0 z-30 bg-slate-900/40 backdrop-blur-[1px]"
+              onClick={() => setFabOpen(false)}
+            />
+          )}
+
+          <div className="md:hidden fixed right-4 bottom-20 z-40 flex flex-col items-end gap-2.5">
+            {fabOpen && (
+              <div className="flex flex-col items-end gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                <button
+                  type="button"
+                  onClick={() => handleTriggerCreate('DRINKING')}
+                  className="flex items-center gap-2.5 pl-4 pr-3 py-2.5 rounded-2xl bg-white border border-orange-200 shadow-lg text-left cursor-pointer active:scale-[0.98]"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">+ Buổi Ăn nhậu</p>
+                    <p className="text-[10px] text-slate-500">Ra quán hoặc góp món tại nhà</p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0">
+                    <Utensils className="w-4 h-4" />
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleTriggerCreate('BADMINTON')}
+                  className="flex items-center gap-2.5 pl-4 pr-3 py-2.5 rounded-2xl bg-white border border-emerald-200 shadow-lg text-left cursor-pointer active:scale-[0.98]"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">+ Buổi Cầu lông</p>
+                    <p className="text-[10px] text-slate-500">Lịch cố định hoặc Phát sinh chia đều</p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <Trophy className="w-4 h-4" />
+                  </span>
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setFabOpen((prev) => !prev)}
+              aria-label={fabOpen ? 'Đóng menu thêm buổi' : 'Thêm buổi mới'}
+              className={`w-14 h-14 rounded-full text-white shadow-xl flex items-center justify-center transition-transform active:scale-95 cursor-pointer ${
+                fabOpen ? 'bg-slate-800' : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
+            >
+              {fabOpen ? <X className="w-6 h-6" /> : <Plus className="w-7 h-7" />}
+            </button>
+          </div>
+        </>
+      )}
+
       {/* Mobile Bottom Navigation */}
       <nav
         aria-label="Điều hướng chính"
@@ -237,7 +336,7 @@ export function Layout({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => onChangeTab(item.id)}
+                onClick={() => handleSelectTab(item.id)}
                 className={`relative flex flex-col items-center justify-center gap-1 px-1 transition-colors cursor-pointer ${
                   isActive ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-800'
                 }`}

@@ -24,6 +24,7 @@ import {
   updateSession,
 } from '../services/api';
 import type {
+  BadmintonBillingMode,
   BadmintonCostDetail,
   CourtLineItem,
   DrinkingVenueType,
@@ -35,7 +36,11 @@ import type {
   SessionType,
   SettingsMap,
 } from '../types';
-import { calculateBadmintonCost, calculateCourtLineAmount } from '../utils/badmintonCost';
+import {
+  calculateAdhocPerPerson,
+  calculateBadmintonCost,
+  calculateCourtLineAmount,
+} from '../utils/badmintonCost';
 import { getTodayDateStr } from '../utils/dateFilters';
 import { calculateDrinkingSplit } from '../utils/drinkingSplit';
 import { compressImageToBase64 } from '../utils/imageCompress';
@@ -49,6 +54,7 @@ interface CreateSessionPageProps {
   prefillPlan: ScheduleDay | null;
   initialType?: SessionType;
   initialDate?: string;
+  initialAdhoc?: boolean;
   onCancelEdit: () => void;
   onSaved: () => Promise<void>;
 }
@@ -66,6 +72,7 @@ export function CreateSessionPage({
   prefillPlan,
   initialType = 'BADMINTON',
   initialDate,
+  initialAdhoc = false,
   onCancelEdit,
   onSaved,
 }: CreateSessionPageProps) {
@@ -91,6 +98,16 @@ export function CreateSessionPage({
   const [receiptSummary, setReceiptSummary] = useState<string>(editingSession?.receipt_summary || '');
   const [note, setNote] = useState<string>(editingSession?.note || prefillPlan?.note || '');
   const [planId, setPlanId] = useState<string>(editingSession?.plan_id || prefillPlan?.plan_id || '');
+  const [billingMode, setBillingMode] = useState<BadmintonBillingMode>(() => {
+    if (editingSession?.type === 'BADMINTON') {
+      return editingSession.billing_mode === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY';
+    }
+    if (prefillPlan) return 'MONTHLY';
+    return initialAdhoc ? 'AD_HOC' : 'MONTHLY';
+  });
+  const [badmintonPayerId, setBadmintonPayerId] = useState<string>(
+    editingSession?.payer_id || defaultTreasurerId
+  );
 
   // Chi phí Cầu lông (Tiền sân + Tiền cầu + Khác + Sân thêm giờ)
   const defaultHours = prefillPlan
@@ -169,6 +186,9 @@ export function CreateSessionPage({
     setNote(editingSession.note || '');
     setPlanId(editingSession.plan_id || '');
     setVenueType((editingSession.venue_type as DrinkingVenueType) || 'RESTAURANT');
+    const isAdhocEdit = editingSession.type === 'BADMINTON' && editingSession.billing_mode === 'AD_HOC';
+    setBillingMode(isAdhocEdit ? 'AD_HOC' : 'MONTHLY');
+    setBadmintonPayerId(editingSession.payer_id || defaultTreasurerId);
 
     if (editingSession.type === 'BADMINTON') {
       if (editingSession.cost_detail) {
@@ -199,9 +219,16 @@ export function CreateSessionPage({
       .then((detail) => {
         if (cancelled) return;
         setSelectedIds(detail.attendances.map((a) => a.member_id));
+        const payerForEdit = editingSession.payer_id || defaultTreasurerId;
         setPaidImmediatelyIds(
           detail.attendances
-            .filter((a) => a.member_type_snapshot === 'GUEST' && a.is_paid)
+            .filter((a) => {
+              if (!a.is_paid) return false;
+              if (editingSession.billing_mode === 'AD_HOC') {
+                return a.member_id !== payerForEdit;
+              }
+              return a.member_type_snapshot === 'GUEST';
+            })
             .map((a) => a.member_id)
         );
         if (editingSession.type === 'DRINKING') {
@@ -271,6 +298,17 @@ export function CreateSessionPage({
   const selectedQuickGuests = useMemo(
     () => quickGuests.filter((g) => g.selected && g.name.trim()),
     [quickGuests]
+  );
+
+  const totalBadmintonAttendees = selectedIds.length + selectedQuickGuests.length;
+  const adhocPerPerson = useMemo(
+    () =>
+      calculateAdhocPerPerson(
+        badmintonCost.totalAmount,
+        totalBadmintonAttendees,
+        settings.rounding_unit || 1000
+      ),
+    [badmintonCost.totalAmount, totalBadmintonAttendees, settings.rounding_unit]
   );
 
   const drinkingSplitPreview = useMemo(() => {
@@ -451,7 +489,9 @@ export function CreateSessionPage({
               type: 'BADMINTON' as const,
               title: finalTitle,
               totalAmount: badmintonCost.totalAmount,
-              guestFee,
+              guestFee: billingMode === 'MONTHLY' ? guestFee : 0,
+              billingMode,
+              payerId: billingMode === 'AD_HOC' ? badmintonPayerId || defaultTreasurerId : undefined,
               courtAmount: badmintonCost.courtAmount,
               shuttleQty: Math.max(0, Math.round(Number(shuttleQtyStr) || 0)),
               shuttleAmount: badmintonCost.shuttleAmount,
@@ -513,7 +553,9 @@ export function CreateSessionPage({
           </h2>
           <p className="text-xs text-slate-500">
             {sessionType === 'BADMINTON'
-              ? 'Chi phí tính vào tổng tháng (không sinh nợ chéo thành viên)'
+              ? billingMode === 'AD_HOC'
+                ? 'Buổi phát sinh: chia đều trực tiếp cho tất cả người tham gia'
+                : 'Buổi cố định: MAIN tính theo tháng, vãng lai đóng theo buổi'
               : 'Góp món / hóa đơn quán & tự cấn trừ phần chia'}
           </p>
         </div>
@@ -587,6 +629,32 @@ export function CreateSessionPage({
             />
           </div>
         </div>
+
+        {sessionType === 'BADMINTON' && (
+          <label
+            className={`flex items-start gap-2.5 p-3 rounded-xl border transition cursor-pointer ${
+              billingMode === 'AD_HOC'
+                ? 'bg-sky-50 border-sky-300'
+                : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={billingMode === 'AD_HOC'}
+              onChange={(e) => setBillingMode(e.target.checked ? 'AD_HOC' : 'MONTHLY')}
+              className="mt-0.5 w-4 h-4 accent-sky-600"
+            />
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-bold text-slate-900">
+                Buổi cầu phát sinh (ngoài lịch cố định)
+              </p>
+              <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                Chia đều tổng tiền buổi cho <strong>tất cả người tham gia</strong> (cả thành viên chính
+                &amp; vãng lai, làm tròn lên 1.000đ). Không tính vào hóa đơn cố định tháng.
+              </p>
+            </div>
+          </label>
+        )}
       </section>
 
       {/* 2A. CHI PHÍ CẦU LÔNG (SÂN + SÂN THÊM GIỜ + CẦU + KHÁC) */}
@@ -715,20 +783,50 @@ export function CreateSessionPage({
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">
-                Phí Vãng lai buổi này (VND)
-              </label>
-              <input
-                type="number"
-                min={0}
-                step={5000}
-                value={guestFeeStr}
-                onChange={(e) => setGuestFeeStr(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
-              />
-            </div>
+            {billingMode === 'MONTHLY' ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Phí Vãng lai buổi này (VND)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step={5000}
+                  value={guestFeeStr}
+                  onChange={(e) => setGuestFeeStr(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Người ứng tiền sân/cầu
+                </label>
+                <select
+                  value={badmintonPayerId}
+                  onChange={(e) => setBadmintonPayerId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
+                >
+                  {activeMembers.map((m) => (
+                    <option key={m.member_id} value={m.member_id}>
+                      {m.name} {m.member_id === defaultTreasurerId ? '(Thủ quỹ)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
+
+          {billingMode === 'AD_HOC' && (
+            <div className="rounded-xl bg-sky-50 border border-sky-200 px-3 py-2.5 flex items-center justify-between gap-2 text-xs">
+              <span className="text-sky-900 font-medium">
+                Chia đều {totalBadmintonAttendees} người (làm tròn lên 1.000đ):
+              </span>
+              <span className="font-extrabold text-sky-700 text-sm">
+                {formatVND(adhocPerPerson)} / người
+              </span>
+            </div>
+          )}
 
           {/* Tiền quả cầu */}
           <div className="grid grid-cols-3 gap-2">
@@ -1066,22 +1164,34 @@ export function CreateSessionPage({
                   </div>
                 </div>
 
-                {checked && sessionType === 'BADMINTON' && m.type === 'GUEST' && (
-                  <button
-                    type="button"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      togglePaidImmediately(m.member_id);
-                    }}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold shrink-0 cursor-pointer ${
-                      isPaidImm
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-white border border-slate-300 text-slate-600'
-                    }`}
-                  >
-                    {isPaidImm ? 'Đã trả ngay' : 'Ghi nợ'}
-                  </button>
-                )}
+                {checked &&
+                  sessionType === 'BADMINTON' &&
+                  billingMode === 'AD_HOC' &&
+                  m.member_id === badmintonPayerId && (
+                    <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-sky-100 text-sky-800 shrink-0">
+                      Người ứng tiền
+                    </span>
+                  )}
+
+                {checked &&
+                  sessionType === 'BADMINTON' &&
+                  ((billingMode === 'AD_HOC' && m.member_id !== badmintonPayerId) ||
+                    (billingMode === 'MONTHLY' && m.type === 'GUEST')) && (
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        togglePaidImmediately(m.member_id);
+                      }}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold shrink-0 cursor-pointer ${
+                        isPaidImm
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-white border border-slate-300 text-slate-600'
+                      }`}
+                    >
+                      {isPaidImm ? 'Đã trả ngay' : 'Ghi nợ'}
+                    </button>
+                  )}
               </div>
             );
           })}
@@ -1172,42 +1282,95 @@ export function CreateSessionPage({
         </div>
 
         {sessionType === 'BADMINTON' ? (
-          <div className="space-y-1.5 text-xs">
-            <p className="text-slate-600">
-              Thành viên chính (MAIN): <span className="font-semibold">Không thu lẻ theo buổi</span> (tính chung vào hóa đơn tháng).
-            </p>
-            {activeMembers
-              .filter((m) => selectedIds.includes(m.member_id) && m.type === 'GUEST')
-              .map((m) => {
-                const paid = paidImmediatelyIds.includes(m.member_id);
+          billingMode === 'AD_HOC' ? (
+            <div className="space-y-1.5 text-xs">
+              <p className="text-sky-800 font-medium">
+                Buổi phát sinh chia đều ({totalBadmintonAttendees} người):{' '}
+                <span className="font-extrabold">{formatVND(adhocPerPerson)}/người</span>
+              </p>
+              {activeMembers
+                .filter((m) => selectedIds.includes(m.member_id))
+                .map((m) => {
+                  const isPayer = m.member_id === badmintonPayerId;
+                  const paid = isPayer || paidImmediatelyIds.includes(m.member_id) || adhocPerPerson === 0;
+                  const payerName =
+                    activeMembers.find((x) => x.member_id === badmintonPayerId)?.name || 'Người ứng';
+                  return (
+                    <div
+                      key={m.member_id}
+                      className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl"
+                    >
+                      <span className="font-semibold text-slate-800">
+                        {m.name} {m.type === 'GUEST' ? '(Vãng lai)' : ''}
+                      </span>
+                      <span className={`font-bold ${paid ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {isPayer
+                          ? 'Người ứng tiền (Đã cấn trừ)'
+                          : paid
+                          ? `Đã trả ${formatVND(adhocPerPerson)}`
+                          : `Chuyển ${payerName} ${formatVND(adhocPerPerson)}`}
+                      </span>
+                    </div>
+                  );
+                })}
+              {selectedQuickGuests.map((g) => {
+                const payerName =
+                  activeMembers.find((x) => x.member_id === badmintonPayerId)?.name || 'Người ứng';
                 return (
                   <div
-                    key={m.member_id}
+                    key={g.name}
                     className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl"
                   >
-                    <span className="font-semibold text-slate-800">{m.name} (Vãng lai)</span>
-                    <span className={`font-bold ${paid ? 'text-emerald-700' : 'text-rose-600'}`}>
-                      {paid ? `Đã trả ${formatVND(guestFee)}` : `Nợ Thủ quỹ ${formatVND(guestFee)}`}
+                    <span className="font-semibold text-slate-800">{g.name} (Vãng lai mới)</span>
+                    <span
+                      className={`font-bold ${g.paidImmediately ? 'text-emerald-700' : 'text-rose-600'}`}
+                    >
+                      {g.paidImmediately
+                        ? `Đã trả ${formatVND(adhocPerPerson)}`
+                        : `Chuyển ${payerName} ${formatVND(adhocPerPerson)}`}
                     </span>
                   </div>
                 );
               })}
-            {selectedQuickGuests.map((g) => (
-              <div
-                key={g.name}
-                className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl"
-              >
-                <span className="font-semibold text-slate-800">{g.name} (Vãng lai mới)</span>
-                <span
-                  className={`font-bold ${g.paidImmediately ? 'text-emerald-700' : 'text-rose-600'}`}
+            </div>
+          ) : (
+            <div className="space-y-1.5 text-xs">
+              <p className="text-slate-600">
+                Thành viên chính (MAIN): <span className="font-semibold">Không thu lẻ theo buổi</span> (tính chung vào hóa đơn tháng).
+              </p>
+              {activeMembers
+                .filter((m) => selectedIds.includes(m.member_id) && m.type === 'GUEST')
+                .map((m) => {
+                  const paid = paidImmediatelyIds.includes(m.member_id);
+                  return (
+                    <div
+                      key={m.member_id}
+                      className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl"
+                    >
+                      <span className="font-semibold text-slate-800">{m.name} (Vãng lai)</span>
+                      <span className={`font-bold ${paid ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {paid ? `Đã trả ${formatVND(guestFee)}` : `Nợ Thủ quỹ ${formatVND(guestFee)}`}
+                      </span>
+                    </div>
+                  );
+                })}
+              {selectedQuickGuests.map((g) => (
+                <div
+                  key={g.name}
+                  className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl"
                 >
-                  {g.paidImmediately
-                    ? `Đã trả ${formatVND(guestFee)}`
-                    : `Nợ Thủ quỹ ${formatVND(guestFee)}`}
-                </span>
-              </div>
-            ))}
-          </div>
+                  <span className="font-semibold text-slate-800">{g.name} (Vãng lai mới)</span>
+                  <span
+                    className={`font-bold ${g.paidImmediately ? 'text-emerald-700' : 'text-rose-600'}`}
+                  >
+                    {g.paidImmediately
+                      ? `Đã trả ${formatVND(guestFee)}`
+                      : `Nợ Thủ quỹ ${formatVND(guestFee)}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
         ) : (
           <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
             {drinkingSplitPreview.splits.map((sp) => {

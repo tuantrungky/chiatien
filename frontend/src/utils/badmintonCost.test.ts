@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateBadmintonCost } from './badmintonCost';
+import { calculateAdhocPerPerson, calculateBadmintonCost } from './badmintonCost';
 
 describe('badmintonCost', () => {
   it('Tính sân đơn + tiền cầu + chi phí khác', () => {
@@ -52,5 +52,12 @@ describe('badmintonCost', () => {
     expect(res.shuttleAmount).toBe(190000);
     expect(res.calculatedTotalAmount).toBe(560000);
     expect(res.totalAmount).toBe(550000);
+  });
+
+  it('Chia đều buổi cầu phát sinh làm tròn lên theo 1.000đ', () => {
+    expect(calculateAdhocPerPerson(400000, 7, 1000)).toBe(58000);
+    expect(calculateAdhocPerPerson(300000, 6, 1000)).toBe(50000);
+    expect(calculateAdhocPerPerson(0, 5, 1000)).toBe(0);
+    expect(calculateAdhocPerPerson(300000, 0, 1000)).toBe(0);
   });
 });

@@ -29,6 +29,7 @@ interface CalendarPageProps {
   settings: SettingsMap;
   onRefreshAll: () => Promise<boolean>;
   onCheckInPlan: (plan: ScheduleDay) => void;
+  onCreateAdhocBadmintonOnDate: (date: string) => void;
   onCreateDrinkingOnDate: (date: string) => void;
 }
 
@@ -59,6 +60,7 @@ export function CalendarPage({
   settings,
   onRefreshAll,
   onCheckInPlan,
+  onCreateAdhocBadmintonOnDate,
   onCreateDrinkingOnDate,
 }: CalendarPageProps) {
   const { isEditor, idToken, handleApiError } = useAuth();
@@ -348,19 +350,29 @@ export function CalendarPage({
           {isEditor && (
             <div className="flex items-center gap-1.5 flex-wrap">
               {!selectedPlan && (
-                <button
-                  type="button"
-                  onClick={() => setAddDayModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Thêm lịch cầu</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onCreateAdhocBadmintonOnDate(selectedDate)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Buổi cầu phát sinh</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddDayModalOpen(true)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Lịch cố định</span>
+                  </button>
+                </>
               )}
               <button
                 type="button"
                 onClick={() => onCreateDrinkingOnDate(selectedDate)}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 text-xs font-bold cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
               >
                 <Utensils className="w-3.5 h-3.5" />
                 <span>+ Buổi nhậu</span>
@@ -457,7 +469,14 @@ export function CalendarPage({
                     <Utensils className="w-4 h-4 text-orange-500 shrink-0" />
                   )}
                   <div className="min-w-0">
-                    <p className="font-bold text-slate-900 truncate">{s.title}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-bold text-slate-900 truncate">{s.title}</p>
+                      {s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC' && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 shrink-0">
+                          Phát sinh
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-slate-500">{s.attendee_count} người tham gia</p>
                   </div>
                 </div>

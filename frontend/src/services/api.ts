@@ -40,6 +40,7 @@ import type {
   VerifyEditorResponse,
 } from '../types';
 import { getPeriodRange, getTodayDateStr } from '../utils/dateFilters';
+import { calculateAdhocPerPerson } from '../utils/badmintonCost';
 import { buildBadmintonDues, simplifyDebts } from '../utils/debtSimplifier';
 import { calculateDrinkingSplit } from '../utils/drinkingSplit';
 import { calculateMonthlyBill } from '../utils/monthlyBill';
@@ -167,8 +168,13 @@ function buildMockSchedule(month: string): ScheduleData {
 function buildMockMonthlyBill(month: string): MonthlyBillData {
   const billRow = mockState.monthlyBills.find((b) => b.month === month);
   const prevRow = mockState.monthlyBills.find((b) => b.month === prevMonthStr(month));
+  const adhocSessionIds = new Set(
+    mockState.sessions
+      .filter((s) => s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC')
+      .map((s) => s.session_id)
+  );
   const sessionsInMonth = mockState.sessions.filter(
-    (s) => s.type === 'BADMINTON' && s.date.slice(0, 7) === month
+    (s) => s.type === 'BADMINTON' && s.date.slice(0, 7) === month && s.billing_mode !== 'AD_HOC'
   );
   const sessionsCost = sessionsInMonth.reduce((sum, s) => sum + s.total_amount, 0);
 
@@ -176,7 +182,8 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
   let paidAmount = 0;
   let unpaidAmount = 0;
   for (const a of mockState.attendances) {
-    if (a.session_type !== 'BADMINTON' || a.member_type_snapshot !== 'GUEST' || a.fee_amount <= 0) continue;
+    if (a.session_type !== 'BADMINTON' || adhocSessionIds.has(a.session_id)) continue;
+    if (a.member_type_snapshot !== 'GUEST' || a.fee_amount <= 0) continue;
     const refMonth = a.is_paid && a.paid_at ? a.paid_at.slice(0, 7) : a.session_date.slice(0, 7);
     if (refMonth === month) {
       if (a.is_paid) {
@@ -324,6 +331,11 @@ function buildMockDebts(): SeparatedDebtsData {
 
 function buildMockGuestStats(month: string): GuestStatsData {
   const byGuest = new Map<string, GuestStatItem>();
+  const adhocSessionIds = new Set(
+    mockState.sessions
+      .filter((s) => s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC')
+      .map((s) => s.session_id)
+  );
   let totalVisits = 0;
   let totalFee = 0;
   let totalPaid = 0;
@@ -333,6 +345,7 @@ function buildMockGuestStats(month: string): GuestStatsData {
     if (
       att.member_type_snapshot !== 'GUEST' ||
       att.session_type !== 'BADMINTON' ||
+      adhocSessionIds.has(att.session_id) ||
       att.session_date.slice(0, 7) !== month
     ) {
       continue;
@@ -401,6 +414,8 @@ function buildMockDashboard(periodType: PeriodType, refDate: string): DashboardD
 
   let badCost = 0;
   let badCount = 0;
+  let fixedCount = 0;
+  let adhocCount = 0;
   let drinkCost = 0;
   let drinkCount = 0;
 
@@ -410,6 +425,8 @@ function buildMockDashboard(periodType: PeriodType, refDate: string): DashboardD
     if (s.type === 'BADMINTON') {
       badCost += s.total_amount;
       badCount++;
+      if (s.billing_mode === 'AD_HOC') adhocCount++;
+      else fixedCount++;
     } else {
       drinkCost += s.total_amount;
       drinkCount++;
@@ -422,10 +439,20 @@ function buildMockDashboard(periodType: PeriodType, refDate: string): DashboardD
     badminton: {
       periodCost: badCost,
       sessionCount: badCount,
+      fixedSessionCount: fixedCount,
+      adhocSessionCount: adhocCount,
       guestIncomeInMonth: monthlyBill.bill.guest_income,
       carryIn: monthlyBill.bill.carry_in,
       projectedCarryOut: monthlyBill.bill.carry_out,
       unpaidTotal: debts.badminton.totalOutstanding,
+      monthlyBillIssued: monthlyBill.dues.length > 0 || monthlyBill.bill.billed_total > 0,
+      monthlyBillStatus: monthlyBill.bill.status,
+      estimate: monthlyBill.bill.estimate,
+      billedTotal: monthlyBill.bill.billed_total,
+      actualCost: monthlyBill.bill.actual_cost,
+      perMember: monthlyBill.bill.per_member,
+      paidMembersCount: monthlyBill.dues.filter((d) => d.is_paid).length,
+      totalMembersCount: monthlyBill.dues.length,
     },
     drinking: {
       periodCost: drinkCost,
@@ -606,31 +633,57 @@ export async function createSession(
   let perPerson = 0;
   let newAttendances: Attendance[] = [];
   const savedItems: (typeof mockState.sessionItems)[number][] = [];
+  const billingMode = sessionType === 'BADMINTON' ? payload.billingMode || 'MONTHLY' : undefined;
 
   if (sessionType === 'BADMINTON') {
     const paidImmSet = new Set(payload.paidImmediatelyMemberIds || []);
-    newAttendances = attendeeIds.map((mId, idx) => {
-      const member = mockState.members.find((m) => m.member_id === mId)!;
-      const fee = member.type === 'GUEST' ? guestFee : 0;
-      const isPaid = member.type === 'MAIN' || paidImmSet.has(mId) || fee === 0;
-      return {
-        attendance_id: `ATT_MOCK_${Date.now()}_${idx}`,
-        session_id: sessionId,
-        session_date: payload.date,
-        session_type: 'BADMINTON',
-        member_id: mId,
-        member_name: member.name,
-        member_type_snapshot: member.type,
-        fee_amount: fee,
-        creditor_id: treasurerId,
-        contributed_amount: 0,
-        net_amount: isPaid ? 0 : fee,
-        is_paid: isPaid,
-        paid_at: isPaid ? now : '',
-        settlement_id: '',
-        note: '',
-      };
-    });
+    if (billingMode === 'AD_HOC') {
+      perPerson = calculateAdhocPerPerson(totalAmount, attendeeIds.length, mockState.settings.rounding_unit);
+      newAttendances = attendeeIds.map((mId, idx) => {
+        const member = mockState.members.find((m) => m.member_id === mId)!;
+        const isPaid = mId === payerId || paidImmSet.has(mId) || perPerson === 0;
+        return {
+          attendance_id: `ATT_MOCK_${Date.now()}_${idx}`,
+          session_id: sessionId,
+          session_date: payload.date,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_name: member.name,
+          member_type_snapshot: member.type,
+          fee_amount: perPerson,
+          creditor_id: payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : perPerson,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: '',
+        };
+      });
+    } else {
+      newAttendances = attendeeIds.map((mId, idx) => {
+        const member = mockState.members.find((m) => m.member_id === mId)!;
+        const fee = member.type === 'GUEST' ? guestFee : 0;
+        const isPaid = member.type === 'MAIN' || paidImmSet.has(mId) || fee === 0;
+        return {
+          attendance_id: `ATT_MOCK_${Date.now()}_${idx}`,
+          session_id: sessionId,
+          session_date: payload.date,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_name: member.name,
+          member_type_snapshot: member.type,
+          fee_amount: fee,
+          creditor_id: treasurerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : fee,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: '',
+        };
+      });
+    }
   } else {
     const rawItems =
       payload.items && payload.items.length > 0
@@ -677,15 +730,17 @@ export async function createSession(
     });
   }
 
+  const resolvedPayerId =
+    sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' ? treasurerId : payerId;
   const session = {
     session_id: sessionId,
     date: payload.date,
     type: sessionType,
     title: payload.title,
     total_amount: totalAmount,
-    guest_fee: sessionType === 'BADMINTON' ? guestFee : 0,
-    payer_id: sessionType === 'BADMINTON' ? treasurerId : payerId,
-    payer_name: mockState.members.find((m) => m.member_id === (sessionType === 'BADMINTON' ? treasurerId : payerId))?.name || '',
+    guest_fee: sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' ? guestFee : 0,
+    payer_id: resolvedPayerId,
+    payer_name: mockState.members.find((m) => m.member_id === resolvedPayerId)?.name || '',
     per_person_amount: perPerson,
     attendee_count: newAttendances.length,
     receipt_drive_id: payload.receiptDriveId || '',
@@ -699,6 +754,7 @@ export async function createSession(
     cost_detail: payload.costDetail ? JSON.stringify(payload.costDetail) : '',
     venue_type: sessionType === 'DRINKING' ? payload.venueType || 'RESTAURANT' : ('' as const),
     plan_id: payload.planId || '',
+    billing_mode: billingMode,
     created_by: 'tuantrungky@gmail.com',
     created_at: now,
     updated_at: now,
@@ -797,6 +853,7 @@ export async function confirmPayment(
     let sum = 0;
     for (const a of mockState.attendances) {
       if (a.session_type === 'BADMINTON' && setIds.has(a.attendance_id) && !a.is_paid) {
+        a.net_amount = 0;
         a.is_paid = true;
         a.paid_at = now;
         a.settlement_id = settlementId;

@@ -238,4 +238,84 @@ describe('debtSimplifier (Tách biệt Cầu lông & Ăn nhậu)', () => {
     expect(result.transfers[0].amount).toBe(250000);
     expect(result.transfers[0].breakdownSessions).toHaveLength(2);
   });
+
+  it('Buổi cầu phát sinh (AD_HOC) chia đều cho cả MAIN & GUEST và không chảy sang Ăn nhậu', () => {
+    const adhocSession: Session = {
+      ...makeSession('SES_ADHOC', '2026-11-24', 'BADMINTON', 'Cầu phát sinh T3', 'MEM_002'),
+      billing_mode: 'AD_HOC',
+      total_amount: 300000,
+      per_person_amount: 100000,
+      guest_fee: 0,
+    };
+    const adhocAttendances: Attendance[] = [
+      {
+        attendance_id: 'ATT_AH_1',
+        session_id: 'SES_ADHOC',
+        session_date: '2026-11-24',
+        session_type: 'BADMINTON',
+        member_id: 'MEM_002',
+        member_type_snapshot: 'MAIN',
+        fee_amount: 100000,
+        creditor_id: 'MEM_002',
+        contributed_amount: 0,
+        net_amount: 0,
+        is_paid: true,
+        paid_at: '2026-11-24T20:00:00+07:00',
+        settlement_id: '',
+        note: '',
+      },
+      {
+        attendance_id: 'ATT_AH_2',
+        session_id: 'SES_ADHOC',
+        session_date: '2026-11-24',
+        session_type: 'BADMINTON',
+        member_id: 'MEM_003',
+        member_type_snapshot: 'MAIN',
+        fee_amount: 100000,
+        creditor_id: 'MEM_002',
+        contributed_amount: 0,
+        net_amount: 100000,
+        is_paid: false,
+        paid_at: '',
+        settlement_id: '',
+        note: '',
+      },
+      {
+        attendance_id: 'ATT_AH_3',
+        session_id: 'SES_ADHOC',
+        session_date: '2026-11-24',
+        session_type: 'BADMINTON',
+        member_id: 'MEM_G1',
+        member_type_snapshot: 'GUEST',
+        fee_amount: 100000,
+        creditor_id: 'MEM_002',
+        contributed_amount: 0,
+        net_amount: 100000,
+        is_paid: false,
+        paid_at: '',
+        settlement_id: '',
+        note: '',
+      },
+    ];
+
+    const drinkingRes = simplifyDebts({
+      attendances: adhocAttendances,
+      sessions: [adhocSession],
+      members,
+    });
+    expect(drinkingRes.transfers).toHaveLength(0);
+
+    const badRes = buildBadmintonDues({
+      monthlyDues: [],
+      attendances: adhocAttendances,
+      sessions: [adhocSession],
+      members,
+      treasurerMemberId: 'MEM_001',
+    });
+    expect(badRes.guestDues).toHaveLength(0);
+    expect(badRes.adhocDues).toHaveLength(2);
+    expect(badRes.adhocDues[0].creditor_id).toBe('MEM_002');
+    expect(badRes.totalAdhocUnpaid).toBe(200000);
+    expect(badRes.totalOutstanding).toBe(200000);
+  });
 });

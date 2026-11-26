@@ -91,6 +91,9 @@ export function DebtsAndSessionsPage({
     for (const g of debts?.badminton.guestDues || []) {
       map.set(g.session_id, (map.get(g.session_id) || 0) + 1);
     }
+    for (const a of debts?.badminton.adhocDues || []) {
+      map.set(a.session_id, (map.get(a.session_id) || 0) + 1);
+    }
     return map;
   }, [debts]);
 
@@ -138,7 +141,8 @@ export function DebtsAndSessionsPage({
     memberId: string,
     amount: number,
     memberName: string,
-    sessionId: string
+    sessionId: string,
+    creditorId?: string
   ) => {
     if (!isEditor || !idToken || busyKey) return;
     setBusyKey(attendanceId);
@@ -148,7 +152,7 @@ export function DebtsAndSessionsPage({
         category: 'BADMINTON',
         mode: 'ITEMS',
         fromMemberId: memberId,
-        toMemberId: debts?.treasurerMemberId || treasurer?.member_id || '',
+        toMemberId: creditorId || debts?.treasurerMemberId || treasurer?.member_id || '',
         attendanceIds: [attendanceId],
         amount,
         method: 'CASH',
@@ -157,7 +161,7 @@ export function DebtsAndSessionsPage({
         await handleToggleSessionDetail(sessionId, true);
       }
       await onRefreshAll();
-      toast.success(`Đã thu phí vãng lai ${formatVND(amount)} của ${memberName}.`);
+      toast.success(`Đã thu ${formatVND(amount)} của ${memberName}.`);
     } catch (err) {
       setActionError(handleApiError(err));
     } finally {
@@ -237,11 +241,33 @@ export function DebtsAndSessionsPage({
     }
   };
 
+  const adhocDues = debts?.badminton.adhocDues ?? [];
   const badmintonTotal = debts?.badminton.totalOutstanding ?? 0;
   const drinkingTotal = simplifiedDrinkingDebts.totalOutstanding;
 
   return (
     <div className="space-y-4">
+      {isEditor && (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onCreateNewSession('BADMINTON')}
+            className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-xs cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Thêm buổi Cầu lông</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onCreateNewSession('DRINKING')}
+            className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs sm:text-sm font-bold shadow-xs cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Thêm buổi Ăn nhậu</span>
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-1 bg-slate-200/70 p-1 rounded-2xl">
         <button
           type="button"
@@ -297,7 +323,8 @@ export function DebtsAndSessionsPage({
             </div>
 
             {(debts?.badminton.monthlyDues.length ?? 0) === 0 &&
-            (debts?.badminton.guestDues.length ?? 0) === 0 ? (
+            (debts?.badminton.guestDues.length ?? 0) === 0 &&
+            adhocDues.length === 0 ? (
               <div className="p-6 text-center text-xs sm:text-sm text-slate-500">
                 Không còn khoản nợ Cầu lông nào.
               </div>
@@ -416,6 +443,73 @@ export function DebtsAndSessionsPage({
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
                         >
                           {busyKey === g.attendance_id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5" />
+                          )}
+                          <span>Đã thu</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {adhocDues.map((a) => (
+                  <div
+                    key={a.attendance_id}
+                    className="p-3.5 flex items-center justify-between gap-2 flex-wrap"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm font-bold text-slate-900">{a.member_name}</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                          Phát sinh {formatShortDateVN(a.session_date)}
+                        </span>
+                      </div>
+                      <p className="text-xs font-extrabold text-rose-600 mt-0.5">
+                        {formatVND(a.amount)} → {a.creditor_name}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenQr({
+                            title: `${a.member_name} → ${a.creditor_name}`,
+                            subtitle: `${a.session_title} (${formatDateVN(a.session_date)})`,
+                            amount: a.amount,
+                            transferContent: a.transferContent,
+                            bankName: a.creditorBank?.bankName || '',
+                            bankBin: a.creditorBank?.bankBin || '',
+                            accountNo: a.creditorBank?.accountNo || '',
+                            accountName: a.creditorBank?.accountName || '',
+                            vietQrUrl: a.vietQrUrl,
+                          })
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>VietQR</span>
+                      </button>
+
+                      {isEditor && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleMarkGuestDuePaid(
+                              a.attendance_id,
+                              a.member_id,
+                              a.amount,
+                              a.member_name,
+                              a.session_id,
+                              a.creditor_id
+                            )
+                          }
+                          disabled={Boolean(busyKey)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
+                        >
+                          {busyKey === a.attendance_id ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <Check className="w-3.5 h-3.5" />
@@ -704,6 +798,11 @@ export function DebtsAndSessionsPage({
                                   ? 'Nhậu ở nhà'
                                   : 'Nhậu quán'}
                               </span>
+                              {isBadminton && s.billing_mode === 'AD_HOC' && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                                  Phát sinh
+                                </span>
+                              )}
                               <span className="inline-flex items-center gap-1 text-xs text-slate-400">
                                 <Calendar className="w-3 h-3" />
                                 {formatDateVN(s.date)}
@@ -722,8 +821,13 @@ export function DebtsAndSessionsPage({
                           <p className="text-base font-extrabold text-slate-900">
                             {formatVND(s.total_amount)}
                           </p>
-                          {!isBadminton && s.per_person_amount > 0 && (
-                            <p className="text-[11px] text-orange-600 font-semibold">
+                          {((!isBadminton && s.per_person_amount > 0) ||
+                            (isBadminton && s.billing_mode === 'AD_HOC' && s.per_person_amount > 0)) && (
+                            <p
+                              className={`text-[11px] font-semibold ${
+                                isBadminton ? 'text-sky-700' : 'text-orange-600'
+                              }`}
+                            >
                               {formatVND(s.per_person_amount)}/người
                             </p>
                           )}
@@ -744,7 +848,11 @@ export function DebtsAndSessionsPage({
 
                           {unpaidCount === 0 ? (
                             <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
-                              {isBadminton ? 'Vãng lai đã thu đủ' : 'Đã tất toán'}
+                              {isBadminton
+                                ? s.billing_mode === 'AD_HOC'
+                                  ? 'Đã thu đủ'
+                                  : 'Vãng lai đã thu đủ'
+                                : 'Đã tất toán'}
                             </span>
                           ) : (
                             <span className="text-xs font-semibold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg">
@@ -875,7 +983,9 @@ export function DebtsAndSessionsPage({
                                         <span className="text-slate-400 shrink-0">Hóa đơn tháng</span>
                                       ) : a.is_paid ? (
                                         <span className="font-semibold text-emerald-700 shrink-0">
-                                          Đã trả ({formatVND(a.fee_amount)})
+                                          {s.billing_mode === 'AD_HOC' && a.member_id === s.payer_id
+                                            ? 'Người ứng tiền'
+                                            : `Đã trả (${formatVND(a.fee_amount)})`}
                                         </span>
                                       ) : (
                                         <div className="flex items-center gap-1.5 shrink-0">
@@ -891,7 +1001,8 @@ export function DebtsAndSessionsPage({
                                                   a.member_id,
                                                   a.fee_amount,
                                                   a.member_name || a.member_id,
-                                                  a.session_id
+                                                  a.session_id,
+                                                  a.creditor_id || s.payer_id
                                                 )
                                               }
                                               disabled={Boolean(busyKey)}

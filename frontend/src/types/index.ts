@@ -4,6 +4,7 @@
 
 export type MemberType = 'MAIN' | 'GUEST';
 export type SessionType = 'BADMINTON' | 'DRINKING';
+export type BadmintonBillingMode = 'MONTHLY' | 'AD_HOC';
 export type DrinkingVenueType = 'RESTAURANT' | 'HOME';
 export type SessionItemKind = 'BILL' | 'ITEM';
 export type ScheduleStatus = 'PLANNED' | 'DONE' | 'CANCELLED';
@@ -81,6 +82,7 @@ export interface Session {
   cost_detail: string; // JSON stringified BadmintonCostDetail
   venue_type: DrinkingVenueType | '';
   plan_id: string;
+  billing_mode?: BadmintonBillingMode;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -303,13 +305,31 @@ export interface BadmintonGuestDueItem {
   vietQrUrl: string | null;
 }
 
+export interface BadmintonAdhocDueItem {
+  attendance_id: string;
+  session_id: string;
+  session_date: string;
+  session_title: string;
+  member_id: string;
+  member_name: string;
+  member_type_snapshot: MemberType;
+  creditor_id: string;
+  creditor_name: string;
+  creditorBank: BankInfo | null;
+  amount: number;
+  transferContent: string;
+  vietQrUrl: string | null;
+}
+
 export interface BadmintonDuesData {
   treasurerMemberId: string;
   treasurerBank: BankInfo | null;
   monthlyDues: BadmintonMonthlyDueItem[];
   guestDues: BadmintonGuestDueItem[];
+  adhocDues: BadmintonAdhocDueItem[];
   totalMonthlyUnpaid: number;
   totalGuestUnpaid: number;
+  totalAdhocUnpaid: number;
   totalOutstanding: number;
 }
 
@@ -350,10 +370,20 @@ export interface DashboardData {
   badminton: {
     periodCost: number;
     sessionCount: number;
+    fixedSessionCount?: number;
+    adhocSessionCount?: number;
     guestIncomeInMonth: number;
     carryIn: number;
     projectedCarryOut: number;
     unpaidTotal: number;
+    monthlyBillIssued?: boolean;
+    monthlyBillStatus?: MonthlyBillStatus;
+    estimate?: number;
+    billedTotal?: number;
+    actualCost?: number;
+    perMember?: number;
+    paidMembersCount?: number;
+    totalMembersCount?: number;
   };
   drinking: {
     periodCost: number;
@@ -515,6 +545,7 @@ export interface CreateSessionPayload {
   otherAmount?: number;
   costDetail?: BadmintonCostDetail;
   planId?: string;
+  billingMode?: BadmintonBillingMode;
   // Ăn nhậu góp món
   venueType?: DrinkingVenueType;
   items?: SessionItemInput[];

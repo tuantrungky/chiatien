@@ -7,6 +7,7 @@
 
 import type {
   Attendance,
+  BadmintonAdhocDueItem,
   BadmintonDuesData,
   BadmintonGuestDueItem,
   BadmintonMonthlyDueItem,
@@ -289,54 +290,100 @@ export function buildBadmintonDues(params: {
       };
     });
 
-  const guestItems: BadmintonGuestDueItem[] = attendances
-    .filter(
-      (a) =>
-        a.session_type === 'BADMINTON' &&
-        a.member_type_snapshot === 'GUEST' &&
-        !a.is_paid &&
-        a.fee_amount > 0
-    )
-    .map((a) => {
-      const mName = membersMap.get(a.member_id)?.name || a.member_name || a.member_id;
-      const s = sessionsMap.get(a.session_id);
+  const guestItems: BadmintonGuestDueItem[] = [];
+  const adhocItems: BadmintonAdhocDueItem[] = [];
+
+  for (const a of attendances) {
+    if (a.session_type !== 'BADMINTON' || a.is_paid || a.fee_amount <= 0) continue;
+    const s = sessionsMap.get(a.session_id);
+    const mName = membersMap.get(a.member_id)?.name || a.member_name || a.member_id;
+    const isAdhoc = s?.billing_mode === 'AD_HOC';
+
+    if (isAdhoc) {
+      const creditorId = a.creditor_id || s?.payer_id || treasurerMemberId;
+      const creditor = membersMap.get(creditorId) || treasurer;
+      const creditorBank =
+        creditor && creditor.bank_bin && creditor.account_no
+          ? {
+              bankBin: creditor.bank_bin,
+              bankName: creditor.bank_name,
+              accountNo: creditor.account_no,
+              accountName: creditor.account_name || creditor.name,
+            }
+          : null;
       const content = buildTransferContent(
         transferPrefix,
         mName,
-        `${treasurer?.name || 'Thu quy'} san ${a.session_date.slice(8, 10)}/${a.session_date.slice(5, 7)}`
+        `${creditor?.name || 'Nguoi ung'} cau ps ${a.session_date.slice(8, 10)}/${a.session_date.slice(5, 7)}`
       );
-      return {
+      adhocItems.push({
         attendance_id: a.attendance_id,
         session_id: a.session_id,
         session_date: a.session_date,
-        session_title: s?.title || 'Cầu lông',
+        session_title: s?.title || 'Cầu lông phát sinh',
         member_id: a.member_id,
         member_name: mName,
+        member_type_snapshot: a.member_type_snapshot,
+        creditor_id: creditorId,
+        creditor_name: creditor?.name || creditorId,
+        creditorBank,
         amount: a.fee_amount,
         transferContent: content,
-        vietQrUrl: treasurer
+        vietQrUrl: creditor
           ? buildVietQrUrl({
-              bankBin: treasurer.bank_bin,
-              accountNo: treasurer.account_no,
-              accountName: treasurer.account_name || treasurer.name,
+              bankBin: creditor.bank_bin,
+              accountNo: creditor.account_no,
+              accountName: creditor.account_name || creditor.name,
               amount: a.fee_amount,
               addInfo: content,
               template: vietqrTemplate,
             })
           : null,
-      };
+      });
+      continue;
+    }
+
+    if (a.member_type_snapshot !== 'GUEST') continue;
+    const content = buildTransferContent(
+      transferPrefix,
+      mName,
+      `${treasurer?.name || 'Thu quy'} san ${a.session_date.slice(8, 10)}/${a.session_date.slice(5, 7)}`
+    );
+    guestItems.push({
+      attendance_id: a.attendance_id,
+      session_id: a.session_id,
+      session_date: a.session_date,
+      session_title: s?.title || 'Cầu lông',
+      member_id: a.member_id,
+      member_name: mName,
+      amount: a.fee_amount,
+      transferContent: content,
+      vietQrUrl: treasurer
+        ? buildVietQrUrl({
+            bankBin: treasurer.bank_bin,
+            accountNo: treasurer.account_no,
+            accountName: treasurer.account_name || treasurer.name,
+            amount: a.fee_amount,
+            addInfo: content,
+            template: vietqrTemplate,
+          })
+        : null,
     });
+  }
 
   const totalMonthlyUnpaid = monthlyItems.reduce((sum, x) => sum + x.amount, 0);
   const totalGuestUnpaid = guestItems.reduce((sum, x) => sum + x.amount, 0);
+  const totalAdhocUnpaid = adhocItems.reduce((sum, x) => sum + x.amount, 0);
 
   return {
     treasurerMemberId,
     treasurerBank,
     monthlyDues: monthlyItems,
     guestDues: guestItems,
+    adhocDues: adhocItems,
     totalMonthlyUnpaid,
     totalGuestUnpaid,
-    totalOutstanding: totalMonthlyUnpaid + totalGuestUnpaid,
+    totalAdhocUnpaid,
+    totalOutstanding: totalMonthlyUnpaid + totalGuestUnpaid + totalAdhocUnpaid,
   };
 }
