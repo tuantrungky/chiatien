@@ -118,18 +118,24 @@ caulong-nhau/
 
 ### 4.1. Luồng Cầu lông (`BADMINTON`)
 
-#### A. Chi phí từng buổi Cầu lông (Sân + Sân thêm giờ + Cầu + Chi phí khác)
-- **Tiền sân (`court_amount`):** Tổng hợp từ mảng `costDetail.courtLines[]` gồm các dòng `{ label, courts, hours, pricePerHour, amount, isExtra }`. Hỗ trợ dòng sân mặc định và thêm nhiều dòng **Sân thêm giờ** (`isExtra = true`, VD: tăng cường 1 sân thêm 1 giờ cho buổi đông vãng lai).
-- **Tiền cầu (`shuttle_amount`):** `shuttle_qty * costDetail.shuttlePrice`.
-- **Chi phí khác (`other_amount`):** Nước uống, phụ phí... (từ ô *"Số lượng cầu / chi phí khác"* hoặc ghi chú).
-- **Tổng tiền buổi (`total_amount`):** `court_amount + shuttle_amount + other_amount`.
-- Cả 3 phần (`courtOverride`, `shuttleOverride`, `totalOverride`) đều hỗ trợ chuyển giữa **tự động tính** và **tự điền tay**.
-- Khi ghi buổi Cầu lông (`createSession` / `updateSession`): **không tạo bút toán `Fund_Ledger` và không tạo khoản hoàn ứng chéo giữa các thành viên chính**. Chi phí của các buổi trong tháng được tổng hợp vào `Monthly_Bills.actual_cost`.
+#### A. Chi phí từng buổi Cầu lông (Buổi cố định 0đ + Vãng lai + Sân thêm giờ vs Buổi phát sinh)
+- **Buổi đánh theo lịch cố định (`billing_mode = MONTHLY`):**
+  - Do tiền sân & hộp cầu cố định đã thu từ đầu tháng qua hóa đơn tháng, khi bấm **Điểm danh & Ghi buổi** sẽ **không phát sinh tiền buổi** (`total_amount = 0` mặc định, thành viên `MAIN` có `fee_amount = 0`, `is_paid = TRUE`).
+  - Chỉ tính phí **Vãng lai theo buổi** (`guest_fee`, mặc định `50000đ` cho khách `GUEST`) và **Sân thêm giờ** (tùy chọn, mặc định `0đ`, cộng thêm khi buổi đó đông phải thuê thêm sân/giờ — phần thêm giờ này sẽ được tự động tổng hợp làm gợi ý `suggestedPrevOvertime` cho hóa đơn đầu tháng kế tiếp).
+- **Buổi cầu phát sinh ngoài lịch (`billing_mode = AD_HOC`):**
+  - Tính đầy đủ chi phí buổi: **Tiền sân** (`courtLines[]`: `số sân * số giờ * giá/giờ`, hỗ trợ thêm nhiều dòng Sân thêm giờ) + **Tiền cầu** (`shuttle_qty * shuttlePrice`) + **Chi phí khác** (`other_amount`), hỗ trợ ghi đè nhập tay độc lập cho `courtOverride`, `shuttleOverride`, `totalOverride`.
+- Khi ghi buổi Cầu lông (`createSession` / `updateSession`): **không tạo bút toán `Fund_Ledger` và không tạo khoản hoàn ứng chéo giữa các thành viên chính**. Nếu tạo buổi cố định từ ngoài trang Lịch trùng ngày `Schedule` còn mở (`!= CANCELLED`), hệ thống tự động khớp `plan_id` và chuyển lịch ngày đó sang `DONE`.
 
-#### B. Lập lịch Cầu lông theo tháng (`Schedule`)
-- Đầu tháng, Editor dùng chức năng **Tạo lịch tháng** (`generateSchedule`): chọn các thứ trong tuần (`weekdays`), giờ bắt đầu/kết thúc, số sân dự kiến, và danh sách thành viên `MAIN` dự kiến đi đánh.
-- Hệ thống hỗ trợ thêm/sửa/hủy từng ngày lẻ (`updateScheduleDay`), xem chi tiết dự kiến ngay trên **Lịch tháng** (`CalendarPage`), và bấm **Điểm danh & Ghi buổi** để mở nhanh `CreateSessionPage` đã điền sẵn ngày, giờ, số sân, thành viên dự kiến và gắn `planId` để cập nhật `Schedule.status = DONE` sau khi lưu.
-- Buổi Ăn nhậu (`DRINKING`) tạo phát sinh trong ngày nào cũng tự động hiển thị trên Lịch tháng để dễ theo dõi.
+#### B. Lập lịch Cầu lông theo tháng (`Schedule`) & Giờ hệ thống `Asia/Ho_Chi_Minh`
+- Toàn bộ hiển thị ngày/giờ hiện tại trên Frontend (`getNowVN`, `getTodayDateStr`, `formatTimeVN`, `Date.UTC` tính thứ) và Backend (`Utilities.formatDate(..., 'Asia/Ho_Chi_Minh', ...)`) chuẩn hóa theo múi giờ Việt Nam (`Asia/Ho_Chi_Minh`).
+- Đầu tháng (hoặc giữa tháng với tùy chọn *"Chỉ tạo từ hôm nay trở đi"*), Editor dùng **Tạo lịch tháng** (`generateSchedule`): tự động khớp `DONE` với những ngày đã có buổi cầu cố định trong `Sessions`. Hỗ trợ thêm/sửa/nghỉ-hủy (`CANCELLED`)/khôi phục/đánh dấu hoàn thành từng ngày lẻ (`updateScheduleDay`).
+- Giao diện Lịch xác định **5 trạng thái hiệu lực** theo giờ Việt Nam (`getEffectiveScheduleStatus`):
+  1. `DONE` (**Đã diễn ra** — đã điểm danh hoặc đánh dấu hoàn thành).
+  2. `CANCELLED` (**Đã hủy / Nghỉ** — gạch ngang, loại khỏi ước tính tiền sân).
+  3. `PAST_UNLOGGED` (**Đã qua — chưa ghi buổi** — quá ngày hoặc quá giờ kết thúc `end_time` trong ngày).
+  4. `ONGOING` (**Đang diễn ra** — trong khung giờ `start_time`–`end_time` hôm nay).
+  5. `UPCOMING` (**Sắp diễn ra**).
+- Cả ngày có lịch cố định vẫn bấm tạo thêm **`+ Buổi cầu phát sinh`** (`AD_HOC`) hoặc **`+ Buổi nhậu`** được ngay trên ngày đang chọn.
 
 #### C. Hóa đơn Cầu lông theo tháng (`Monthly_Bills` & `Monthly_Dues`) — Thay cho quỹ cố định cũ
 1. **Phát hành đầu tháng (`issueMonthlyBill`):**
@@ -290,8 +296,8 @@ Cấu hình các khóa mặc định:
 | Route / Tab | Vai trò xem | Chức năng chính |
 | :--- | :--- | :--- |
 | `/` (**Tổng quan**) | Viewer, Member, Editor | Thanh thao tác nhanh Editor (`+ Thêm buổi Cầu lông` / `+ Thêm buổi Ăn nhậu`); 4 thẻ KPI (`Chi Cầu lông`, `Chi Ăn nhậu`, `Bù trừ Cầu tháng` kèm nút xem công thức giải thích, `Nợ chưa thu`); Bộ lọc `"Tôi là ai?"` + `"Chỉ xem của tôi"` / `"Cả CLB (nhắc nhau)"`; Cảnh báo quá hạn & VietQR; Biểu đồ & 5 buổi gần nhất. |
-| `/calendar` (**Lịch**) | Viewer, Member, Editor | Lịch tháng hiển thị ngày đánh cầu (`Schedule`), buổi cầu lông cố định/phát sinh & ăn nhậu; Editor lập lịch tháng, thêm/hủy ngày, bấm **"Điểm danh & Ghi buổi"** hoặc **"+ Buổi cầu phát sinh"** mở nhanh form tạo buổi. |
+| `/calendar` (**Lịch**) | Viewer, Member, Editor | Lịch tháng chuẩn giờ VN (`Asia/Ho_Chi_Minh`) với 5 trạng thái (`Đã diễn ra`, `Đang diễn ra`, `Sắp diễn ra`, `Qua ngày chưa ghi`, `Nghỉ/Hủy`), thanh tóm tắt tháng, nút `Hôm nay`, tạo lịch tháng (có tùy chọn từ hôm nay), thêm/sửa/hủy/khôi phục ngày lẻ, bấm **"Điểm danh & Ghi buổi"**, **"+ Buổi cầu phát sinh"**, hoặc sửa buổi thực tế trong ngày. |
 | `/debts` (**Công nợ**) | Viewer, Member, Editor | Bộ lọc `"Tôi là ai?"` + `"Copy tin nhắn nhắc nợ Zalo"`; Tab `1. Tiền Cầu lông` (Tháng cầu `MAIN`, Phát sinh & Vãng lai -> VietQR) & `2. Tiền Ăn nhậu` (Chuyển khoản tối ưu nội bộ + breakdown từng buổi + VietQR); Lịch sử đã thu kèm nút **Hoàn tác** (`undoSettlement`); Tab `Lịch sử buổi`. |
-| `/monthly` (**Tháng cầu**) | Viewer, Member, Editor | Công thức minh bạch, nút **Copy báo thu Zalo**, góp ống cầu trong tháng, danh sách `MAIN` kèm cảnh báo quá hạn & VietQR; Tab thống kê `Vãng lai theo tháng`. |
-| `/create` (**Ghi buổi**) | Editor | Tạo/Sửa buổi `BADMINTON` (nhiều dòng sân + **Sân thêm giờ**, cầu, chi phí khác, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI dùng chung cho cả 2 loại buổi; Tick tay + tìm kiếm + thêm nhanh vãng lai. |
+| `/monthly` (**Tháng cầu**) | Viewer, Member, Editor | Công thức minh bạch, nút **Copy báo thu Zalo**, góp ống cầu trong tháng, danh sách `MAIN` kèm cảnh báo quá hạn & VietQR; tự động gợi ý `suggestedPrevOvertime` từ các dòng Sân thêm giờ tháng trước; Tab thống kê `Vãng lai theo tháng`. |
+| `/create` (**Ghi buổi**) | Editor | Tạo/Sửa buổi `BADMINTON` cố định (0đ mặc định, thu Vãng lai `50.000đ` + tùy chọn **Sân thêm giờ**), `BADMINTON` phát sinh (`Sân + Cầu + Khác`, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI dùng chung; Tick tay + tìm kiếm + thêm nhanh vãng lai. |
 | `/settings` (**Cài đặt**) | Editor | Cấu hình `Settings` (giá sân/giờ, giá quả cầu, số sân/giờ mặc định, phí vãng lai, Thủ quỹ), quản lý `Members` và `Editors` (`ADMIN`). |

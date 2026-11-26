@@ -166,7 +166,13 @@ export function MonthlyBadmintonPage({
     setTubePriceStr(String(defaultTubePrice));
     setShuttleAmountOverride(Boolean(parsedDetail.shuttleAmountOverride));
     setManualShuttleAmountStr(String(bill?.shuttle_tube_amount ?? 0));
-    setPrevOvertimeStr(String(bill?.prev_overtime_fee ?? 0));
+    const initialPrevOvertime =
+      bill?.prev_overtime_fee && bill.prev_overtime_fee > 0
+        ? bill.prev_overtime_fee
+        : dues.length === 0
+        ? monthlyBill?.suggestedPrevOvertime ?? 0
+        : 0;
+    setPrevOvertimeStr(String(initialPrevOvertime));
     setVenueTotalOverride(Boolean(parsedDetail.venueTotalOverride));
     setManualVenueTotalStr(String(bill?.estimate ?? suggestedCourt));
     setCarryInStr(String(bill?.carry_in ?? 0));
@@ -1090,9 +1096,23 @@ export function MonthlyBadmintonPage({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Tiền thêm giờ tháng trước (VND)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-slate-600">
+                      Tiền thêm giờ tháng trước (VND)
+                    </label>
+                    {(monthlyBill?.suggestedPrevOvertime ?? 0) > 0 &&
+                      Number(prevOvertimeStr || 0) !== (monthlyBill?.suggestedPrevOvertime ?? 0) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPrevOvertimeStr(String(monthlyBill?.suggestedPrevOvertime ?? 0))
+                          }
+                          className="text-[10px] font-semibold text-blue-600 cursor-pointer"
+                        >
+                          Dùng gợi ý ({formatVND(monthlyBill?.suggestedPrevOvertime ?? 0)})
+                        </button>
+                      )}
+                  </div>
                   <input
                     type="number"
                     min={0}
@@ -1101,6 +1121,11 @@ export function MonthlyBadmintonPage({
                     onChange={(e) => setPrevOvertimeStr(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
                   />
+                  {(monthlyBill?.suggestedPrevOvertime ?? 0) > 0 && (
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      Gợi ý từ Sân thêm giờ T.trước: {formatVND(monthlyBill?.suggestedPrevOvertime ?? 0)}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">

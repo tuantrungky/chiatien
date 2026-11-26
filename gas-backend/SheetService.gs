@@ -654,6 +654,10 @@ function todayDateStr_() {
   return Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'yyyy-MM-dd');
 }
 
+function nowTimeVN_() {
+  return Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'HH:mm');
+}
+
 function generateId_(prefix) {
   var datePart = Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'yyyyMMdd_HHmmss');
   var randPart = Math.floor(1000 + Math.random() * 9000);
@@ -1408,12 +1412,26 @@ function getScheduleData(monthStr) {
     ? monthStr.trim()
     : todayDateStr_().slice(0, 7);
 
+  var fixedSessions = getSessionsList({ type: 'BADMINTON', month: targetMonth });
+  var fixedSessionByDate = {};
+  for (var si = 0; si < fixedSessions.length; si++) {
+    var fs = fixedSessions[si];
+    if (fs.billing_mode === 'AD_HOC') continue;
+    if (!fixedSessionByDate[fs.date]) {
+      fixedSessionByDate[fs.date] = fs;
+    }
+  }
+
   var rows = getSheetObjects_('Schedule');
   var days = [];
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     var dStr = String(r.date || '').trim();
     if (dStr.slice(0, 7) !== targetMonth) continue;
+    var rowStatus = String(r.status || 'PLANNED').trim().toUpperCase();
+    var matchedFixed = fixedSessionByDate[dStr] || null;
+    var resolvedStatus = (rowStatus !== 'CANCELLED' && matchedFixed) ? 'DONE' : rowStatus;
+    var resolvedSessionId = String(r.session_id || '').trim() || (matchedFixed && rowStatus !== 'CANCELLED' ? matchedFixed.session_id : '');
     days.push({
       plan_id: String(r.plan_id || '').trim(),
       date: dStr,
@@ -1421,8 +1439,8 @@ function getScheduleData(monthStr) {
       end_time: String(r.end_time || '21:30').trim(),
       courts: toInt_(r.courts, 2),
       planned_member_ids: String(r.planned_member_ids || '').trim(),
-      status: String(r.status || 'PLANNED').trim().toUpperCase(),
-      session_id: String(r.session_id || '').trim(),
+      status: resolvedStatus,
+      session_id: resolvedSessionId,
       note: String(r.note || '').trim()
     });
   }
@@ -1451,26 +1469,37 @@ function generateScheduleRecord(payload) {
   var plannedIds = Array.isArray(p.plannedMemberIds || p.planned_member_ids)
     ? (p.plannedMemberIds || p.planned_member_ids).join(',')
     : String(p.planned_member_ids || '').trim();
+  var fromDate = String(p.fromDate || p.from_date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) fromDate = '';
   var note = String(p.note || '').trim();
 
   var existing = getScheduleData(monthStr).days;
   var existingDates = {};
   for (var e = 0; e < existing.length; e++) existingDates[existing[e].date] = true;
 
+  var fixedSessions = getSessionsList({ type: 'BADMINTON', month: monthStr });
+  var fixedByDate = {};
+  for (var fi = 0; fi < fixedSessions.length; fi++) {
+    if (fixedSessions[fi].billing_mode === 'AD_HOC') continue;
+    if (!fixedByDate[fixedSessions[fi].date]) fixedByDate[fixedSessions[fi].date] = fixedSessions[fi];
+  }
+
   var parts = monthStr.split('-');
   var year = Number(parts[0]);
   var month = Number(parts[1]);
-  var daysInMonth = new Date(year, month, 0).getDate();
+  var daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   var pad2 = function (n) { return n < 10 ? '0' + n : String(n); };
   var now = nowIso_();
   var toAppend = [];
 
   for (var d = 1; d <= daysInMonth; d++) {
-    var dt = new Date(year, month - 1, d);
-    if (!weekdayMap[dt.getDay()]) continue;
+    var dt = new Date(Date.UTC(year, month - 1, d));
+    if (!weekdayMap[dt.getUTCDay()]) continue;
     var dateStr = year + '-' + pad2(month) + '-' + pad2(d);
+    if (fromDate && dateStr < fromDate) continue;
     if (existingDates[dateStr]) continue;
 
+    var matched = fixedByDate[dateStr] || null;
     toAppend.push({
       plan_id: generateId_('PLN') + '_' + d,
       date: dateStr,
@@ -1478,8 +1507,8 @@ function generateScheduleRecord(payload) {
       end_time: endTime,
       courts: courts,
       planned_member_ids: plannedIds,
-      status: 'PLANNED',
-      session_id: '',
+      status: matched ? 'DONE' : 'PLANNED',
+      session_id: matched ? matched.session_id : '',
       note: note,
       created_at: now,
       updated_at: now
@@ -1750,6 +1779,25 @@ function getMonthlyBillData(monthStr) {
     carry_over_credits: billRow ? String(billRow.carry_over_credits || '') : ''
   };
 
+  var suggestedPrevOvertime = 0;
+  for (var psi = 0; psi < allBadmintonSessions.length; psi++) {
+    var ps = allBadmintonSessions[psi];
+    if (ps.date.slice(0, 7) !== prevMonth || ps.billing_mode === 'AD_HOC') continue;
+    var parsedCostDetail = ps.cost_detail ? parseJsonSafe_(String(ps.cost_detail), null) : null;
+    if (parsedCostDetail && Array.isArray(parsedCostDetail.courtLines)) {
+      for (var cl = 0; cl < parsedCostDetail.courtLines.length; cl++) {
+        var line = parsedCostDetail.courtLines[cl];
+        if (!line || !line.isExtra) continue;
+        var lineAmt = line.amount !== undefined
+          ? toInt_(line.amount, 0)
+          : Math.round(toFloat_(line.courts, 0) * toFloat_(line.hours, 0) * toInt_(line.pricePerHour, 0));
+        suggestedPrevOvertime += Math.max(0, lineAmt);
+      }
+    } else if (ps.court_amount > 0 && ps.shuttle_amount === 0 && ps.other_amount === 0) {
+      suggestedPrevOvertime += ps.court_amount;
+    }
+  }
+
   return {
     month: targetMonth,
     bill: bill,
@@ -1761,6 +1809,7 @@ function getMonthlyBillData(monthStr) {
       unpaidAmount: guestUnpaidAmount
     },
     suggestedEstimateFromSchedule: suggestedEstimate,
+    suggestedPrevOvertime: suggestedPrevOvertime,
     contributions: contributions,
     prevMonthContributions: prevMonthContributions
   };
@@ -2435,6 +2484,16 @@ function createSessionRecord(payload, editorEmail) {
   var billingMode = sessionType === 'BADMINTON'
     ? (String(p.billingMode || p.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
     : '';
+  if (sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' && !planId) {
+    var scheduleRows = getSheetObjects_('Schedule');
+    for (var sr = 0; sr < scheduleRows.length; sr++) {
+      var sRow = scheduleRows[sr];
+      if (String(sRow.date || '').trim() === dateStr && String(sRow.status || '').toUpperCase() !== 'CANCELLED') {
+        planId = String(sRow.plan_id || '').trim();
+        break;
+      }
+    }
+  }
   var venueType = sessionType === 'DRINKING' ? String(p.venueType || p.venue_type || 'RESTAURANT').trim().toUpperCase() : '';
   var unit = settings.rounding_unit || 1000;
 

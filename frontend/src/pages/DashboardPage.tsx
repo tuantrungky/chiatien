@@ -48,9 +48,11 @@ import {
   filterByPeriod,
   formatDateVN,
   formatShortDateVN,
-  getTodayDateStr,
+  getNowVN,
+  getWeekdayIndex,
 } from '../utils/dateFilters';
 import { getOverdueInfo } from '../utils/overdue';
+import { getEffectiveScheduleStatus } from '../utils/schedule';
 import { formatVND } from '../utils/vietqr';
 
 interface DashboardPageProps {
@@ -76,9 +78,8 @@ interface DashboardPageProps {
 const WEEKDAY_VN = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 
 function getWeekdayLabel(dateStr: string): string {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  if (!y || !m || !d) return '';
-  return WEEKDAY_VN[new Date(y, m - 1, d).getDay()] || '';
+  if (!dateStr) return '';
+  return WEEKDAY_VN[getWeekdayIndex(dateStr)] || '';
 }
 
 export function DashboardPage({
@@ -170,16 +171,23 @@ export function DashboardPage({
   const paidProgressPct =
     totalMembersCount > 0 ? Math.round((paidMembersCount / totalMembersCount) * 100) : 0;
 
-  // 3 ngày đánh cầu sắp tới từ hôm nay
-  const todayStr = getTodayDateStr();
-  const upcomingPlans = useMemo(
-    () =>
-      (schedule?.days || [])
-        .filter((d) => d.status === 'PLANNED' && d.date >= todayStr)
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .slice(0, 3),
-    [schedule, todayStr]
-  );
+  // 3 ngày đánh cầu sắp tới từ hôm nay (theo giờ VN Asia/Ho_Chi_Minh)
+  const nowVN = getNowVN();
+  const todayStr = nowVN.date;
+  const upcomingPlans = useMemo(() => {
+    const byDate = new Map<string, Session[]>();
+    for (const s of sessions) {
+      if (!byDate.has(s.date)) byDate.set(s.date, []);
+      byDate.get(s.date)!.push(s);
+    }
+    return (schedule?.days || [])
+      .filter((d) => {
+        const eff = getEffectiveScheduleStatus(d, byDate.get(d.date) || [], nowVN).status;
+        return eff === 'UPCOMING' || eff === 'ONGOING';
+      })
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(0, 3);
+  }, [schedule, sessions, nowVN]);
 
   const barChartData = useMemo(() => {
     const groupByMonth = periodType === 'QUARTER' || periodType === 'YEAR';
@@ -527,16 +535,33 @@ export function DashboardPage({
                 const plannedCount = plan.planned_member_ids
                   ? plan.planned_member_ids.split(',').filter((x) => x.trim()).length
                   : 0;
+                const isOngoing =
+                  getEffectiveScheduleStatus(
+                    plan,
+                    sessions.filter((s) => s.date === plan.date),
+                    nowVN
+                  ).status === 'ONGOING';
                 return (
                   <div
                     key={plan.plan_id}
-                    className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 border border-slate-200/80 px-3 py-2 text-xs"
+                    className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
+                      isOngoing
+                        ? 'bg-purple-50/70 border-purple-200'
+                        : 'bg-slate-50 border-slate-200/80'
+                    }`}
                   >
                     <div className="min-w-0">
-                      <p className="font-bold text-slate-900">
-                        {getWeekdayLabel(plan.date)}, {formatShortDateVN(plan.date)} • {plan.start_time}–
-                        {plan.end_time}
-                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-bold text-slate-900">
+                          {getWeekdayLabel(plan.date)}, {formatShortDateVN(plan.date)} •{' '}
+                          {plan.start_time}–{plan.end_time}
+                        </p>
+                        {isOngoing && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 animate-pulse">
+                            Đang diễn ra
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11px] text-slate-500">
                         {plan.courts} sân • {plannedCount} người dự kiến
                       </p>

@@ -214,6 +214,7 @@ export default function App() {
                     settings={bootstrap.settings}
                     onRefreshAll={refreshAll}
                     onCheckInPlan={handleCheckInPlan}
+                    onEditSession={handleEditSession}
                     onCreateAdhocBadmintonOnDate={(d) =>
                       handleCreateNewSession('BADMINTON', { date: d, isAdhoc: true })
                     }

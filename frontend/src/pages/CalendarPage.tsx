@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react';
 import {
+  Ban,
   Calendar as CalendarIcon,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Edit3,
   Loader2,
   Plus,
+  RotateCcw,
   Trash2,
   Trophy,
   Users,
@@ -16,8 +20,16 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { generateSchedule, updateScheduleDay } from '../services/api';
-import type { Member, ScheduleData, ScheduleDay, Session, SettingsMap } from '../types';
-import { formatDateVN, getTodayDateStr } from '../utils/dateFilters';
+import type {
+  Member,
+  ScheduleData,
+  ScheduleDay,
+  ScheduleStatus,
+  Session,
+  SettingsMap,
+} from '../types';
+import { formatDateVN, getNowVN, getWeekdayIndex } from '../utils/dateFilters';
+import { getEffectiveScheduleStatus } from '../utils/schedule';
 import { formatVND } from '../utils/vietqr';
 
 interface CalendarPageProps {
@@ -29,11 +41,13 @@ interface CalendarPageProps {
   settings: SettingsMap;
   onRefreshAll: () => Promise<boolean>;
   onCheckInPlan: (plan: ScheduleDay) => void;
+  onEditSession?: (session: Session) => void;
   onCreateAdhocBadmintonOnDate: (date: string) => void;
   onCreateDrinkingOnDate: (date: string) => void;
 }
 
 const WEEKDAY_LABELS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+const WEEKDAY_VN_NAMES = ['CN', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
 const WEEKDAY_OPTIONS = [
   { val: 1, label: 'T2' },
   { val: 2, label: 'T3' },
@@ -46,9 +60,9 @@ const WEEKDAY_OPTIONS = [
 
 function shiftMonthStr(monthStr: string, delta: number): string {
   const [y, m] = monthStr.split('-').map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  const mm = d.getMonth() + 1;
-  return `${d.getFullYear()}-${mm < 10 ? '0' + mm : mm}`;
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  const mm = d.getUTCMonth() + 1;
+  return `${d.getUTCFullYear()}-${mm < 10 ? '0' + mm : mm}`;
 }
 
 export function CalendarPage({
@@ -60,15 +74,20 @@ export function CalendarPage({
   settings,
   onRefreshAll,
   onCheckInPlan,
+  onEditSession,
   onCreateAdhocBadmintonOnDate,
   onCreateDrinkingOnDate,
 }: CalendarPageProps) {
   const { isEditor, idToken, handleApiError } = useAuth();
   const toast = useToast();
 
-  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateStr());
+  const nowVN = getNowVN();
+  const todayStr = nowVN.date;
+
+  const [selectedDate, setSelectedDate] = useState<string>(() => todayStr);
   const [genModalOpen, setGenModalOpen] = useState(false);
-  const [addDayModalOpen, setAddDayModalOpen] = useState(false);
+  const [dayModalOpen, setDayModalOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<ScheduleDay | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Form Tạo lịch tháng tự động
@@ -83,11 +102,15 @@ export function CalendarPage({
   const [plannedIds, setPlannedIds] = useState<string[]>(() =>
     mainMembers.map((m) => m.member_id)
   );
+  const [onlyFromToday, setOnlyFromToday] = useState(false);
 
-  // Form thêm 1 ngày lẻ
+  // Form Thêm / Sửa 1 ngày lẻ
   const [singleStart, setSingleStart] = useState('20:00');
   const [singleEnd, setSingleEnd] = useState('21:30');
   const [singleCourts, setSingleCourts] = useState(String(settings.default_court_count || 2));
+  const [singlePlannedIds, setSinglePlannedIds] = useState<string[]>(() =>
+    mainMembers.map((m) => m.member_id)
+  );
   const [singleNote, setSingleNote] = useState('');
 
   const membersMap = useMemo(() => {
@@ -113,12 +136,12 @@ export function CalendarPage({
     return map;
   }, [sessions]);
 
-  // Xây lưới ngày trong tháng (bắt đầu từ Thứ 2)
+  // Xây lưới ngày trong tháng (bắt đầu từ Thứ 2, dùng Date.UTC độc lập múi giờ)
   const calendarCells = useMemo(() => {
     const [year, month] = activeMonth.split('-').map(Number);
-    const firstDay = new Date(year, month - 1, 1);
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const jsDay = firstDay.getDay(); // 0=CN..6=T7
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const jsDay = firstDay.getUTCDay(); // 0=CN..6=T7
     const leadingBlanks = jsDay === 0 ? 6 : jsDay - 1;
 
     const cells: Array<{ dateStr: string | null; dayNum: number | null }> = [];
@@ -133,14 +156,83 @@ export function CalendarPage({
     return cells;
   }, [activeMonth]);
 
+  // Thống kê tóm tắt tháng đang xem
+  const monthSummary = useMemo(() => {
+    let done = 0;
+    let unlogged = 0;
+    let upcoming = 0;
+    let cancelled = 0;
+
+    for (const plan of schedule?.days || []) {
+      if (plan.date.slice(0, 7) !== activeMonth) continue;
+      const eff = getEffectiveScheduleStatus(plan, sessionsByDate.get(plan.date) || [], nowVN).status;
+      if (eff === 'DONE') done++;
+      else if (eff === 'PAST_UNLOGGED') unlogged++;
+      else if (eff === 'CANCELLED') cancelled++;
+      else upcoming++;
+    }
+
+    const monthSessions = sessions.filter((s) => s.date.slice(0, 7) === activeMonth);
+    const adhocCount = monthSessions.filter(
+      (s) => s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC'
+    ).length;
+    const drinkingCount = monthSessions.filter((s) => s.type === 'DRINKING').length;
+
+    return { done, unlogged, upcoming, cancelled, adhocCount, drinkingCount };
+  }, [schedule, sessions, sessionsByDate, activeMonth, nowVN]);
+
   const selectedPlan = scheduleByDate.get(selectedDate) || null;
   const selectedDaySessions = sessionsByDate.get(selectedDate) || [];
-  const todayStr = getTodayDateStr();
+  const selectedPlanStatus = selectedPlan
+    ? getEffectiveScheduleStatus(selectedPlan, selectedDaySessions, nowVN)
+    : null;
+  const hasSelectedFixedSession = selectedDaySessions.some(
+    (s) => s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC'
+  );
+
+  const handleMonthStep = (delta: number) => {
+    const nextMonth = shiftMonthStr(activeMonth, delta);
+    onChangeMonth(nextMonth);
+    setSelectedDate(nextMonth === todayStr.slice(0, 7) ? todayStr : `${nextMonth}-01`);
+  };
+
+  const handleGoToday = () => {
+    const curMonth = todayStr.slice(0, 7);
+    if (activeMonth !== curMonth) onChangeMonth(curMonth);
+    setSelectedDate(todayStr);
+  };
 
   const handleOpenGenModal = () => {
     setPlannedIds(mainMembers.map((m) => m.member_id));
     setCourts(String(settings.default_court_count || 2));
+    setOnlyFromToday(activeMonth === todayStr.slice(0, 7));
     setGenModalOpen(true);
+  };
+
+  const handleOpenAddSingleModal = () => {
+    setEditingPlan(null);
+    setSingleStart('20:00');
+    setSingleEnd('21:30');
+    setSingleCourts(String(settings.default_court_count || 2));
+    setSinglePlannedIds(mainMembers.map((m) => m.member_id));
+    setSingleNote('');
+    setDayModalOpen(true);
+  };
+
+  const handleOpenEditSingleModal = (plan: ScheduleDay) => {
+    setEditingPlan(plan);
+    setSingleStart(plan.start_time || '20:00');
+    setSingleEnd(plan.end_time || '21:30');
+    setSingleCourts(String(plan.courts || settings.default_court_count || 2));
+    const parsedIds = plan.planned_member_ids
+      ? plan.planned_member_ids
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : mainMembers.map((m) => m.member_id);
+    setSinglePlannedIds(parsedIds);
+    setSingleNote(plan.note || '');
+    setDayModalOpen(true);
   };
 
   const handleGenerateSchedule = async (e: React.FormEvent) => {
@@ -160,6 +252,7 @@ export function CalendarPage({
         endTime,
         courts: Math.max(1, Number(courts) || 2),
         plannedMemberIds: plannedIds,
+        fromDate: onlyFromToday ? todayStr : undefined,
       });
       setGenModalOpen(false);
       await onRefreshAll();
@@ -171,25 +264,56 @@ export function CalendarPage({
     }
   };
 
-  const handleAddSingleDay = async (e: React.FormEvent) => {
+  const handleSaveSingleDay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idToken || busy) return;
     setBusy(true);
     try {
       await updateScheduleDay(idToken, {
         operation: 'UPSERT',
-        date: selectedDate,
+        planId: editingPlan?.plan_id,
+        date: editingPlan?.date || selectedDate,
         startTime: singleStart,
         endTime: singleEnd,
         courts: Math.max(1, Number(singleCourts) || 2),
-        plannedMemberIds: mainMembers.map((m) => m.member_id),
-        status: 'PLANNED',
+        plannedMemberIds: singlePlannedIds,
+        status: editingPlan?.status || 'PLANNED',
         note: singleNote,
       });
-      setAddDayModalOpen(false);
+      setDayModalOpen(false);
+      setEditingPlan(null);
       setSingleNote('');
       await onRefreshAll();
-      toast.success(`Đã thêm lịch ngày ${formatDateVN(selectedDate)}.`);
+      toast.success(
+        editingPlan
+          ? `Đã cập nhật lịch ngày ${formatDateVN(editingPlan.date)}.`
+          : `Đã thêm lịch ngày ${formatDateVN(selectedDate)}.`
+      );
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpdatePlanStatus = async (plan: ScheduleDay, nextStatus: ScheduleStatus) => {
+    if (!idToken || busy) return;
+    setBusy(true);
+    try {
+      await updateScheduleDay(idToken, {
+        operation: 'UPSERT',
+        planId: plan.plan_id,
+        date: plan.date,
+        status: nextStatus,
+      });
+      await onRefreshAll();
+      const label =
+        nextStatus === 'DONE'
+          ? 'Đã đánh dấu đã diễn ra'
+          : nextStatus === 'CANCELLED'
+          ? 'Đã báo nghỉ / hủy buổi'
+          : 'Đã khôi phục lịch';
+      toast.success(`${label} (${formatDateVN(plan.date)}).`);
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -218,13 +342,14 @@ export function CalendarPage({
 
   return (
     <div className="space-y-4">
-      {/* Header chọn tháng & nút Tạo lịch */}
+      {/* Header chọn tháng & nút Hôm nay / Tạo lịch */}
       <div className="bg-white rounded-2xl border border-slate-200 p-3 flex items-center justify-between gap-2 shadow-xs flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             type="button"
-            onClick={() => onChangeMonth(shiftMonthStr(activeMonth, -1))}
+            onClick={() => handleMonthStep(-1)}
             className="w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 cursor-pointer"
+            aria-label="Tháng trước"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -236,10 +361,19 @@ export function CalendarPage({
           </div>
           <button
             type="button"
-            onClick={() => onChangeMonth(shiftMonthStr(activeMonth, 1))}
+            onClick={() => handleMonthStep(1)}
             className="w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 cursor-pointer"
+            aria-label="Tháng sau"
           >
             <ChevronRight className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleGoToday}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+            title={`Hôm nay (${formatDateVN(todayStr)}, giờ VN)`}
+          >
+            Hôm nay
           </button>
         </div>
 
@@ -252,6 +386,36 @@ export function CalendarPage({
             <Plus className="w-4 h-4" />
             <span>Tạo lịch tháng</span>
           </button>
+        )}
+      </div>
+
+      {/* Thanh tóm tắt trạng thái tháng (theo giờ VN) */}
+      <div className="flex items-center gap-2 flex-wrap text-[11px]">
+        <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+          Đã diễn ra: {monthSummary.done}
+        </span>
+        {monthSummary.unlogged > 0 && (
+          <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-300 font-semibold">
+            Chưa ghi buổi: {monthSummary.unlogged}
+          </span>
+        )}
+        <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+          Sắp tới: {monthSummary.upcoming}
+        </span>
+        {monthSummary.cancelled > 0 && (
+          <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
+            Nghỉ/Hủy: {monthSummary.cancelled}
+          </span>
+        )}
+        {monthSummary.adhocCount > 0 && (
+          <span className="px-2.5 py-1 rounded-full bg-cyan-50 text-cyan-800 border border-cyan-200 font-semibold">
+            Phát sinh: {monthSummary.adhocCount}
+          </span>
+        )}
+        {monthSummary.drinkingCount > 0 && (
+          <span className="px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-semibold">
+            Ăn nhậu: {monthSummary.drinkingCount}
+          </span>
         )}
       </div>
 
@@ -272,10 +436,17 @@ export function CalendarPage({
             }
             const plan = scheduleByDate.get(cell.dateStr);
             const daySessions = sessionsByDate.get(cell.dateStr) || [];
+            const planEff = plan ? getEffectiveScheduleStatus(plan, daySessions, nowVN) : null;
+            const hasFixedBadminton = daySessions.some(
+              (s) => s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC'
+            );
+            const hasAdhocBadminton = daySessions.some(
+              (s) => s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC'
+            );
             const hasDrinking = daySessions.some((s) => s.type === 'DRINKING');
-            const hasBadmintonSession = daySessions.some((s) => s.type === 'BADMINTON');
             const isSelected = selectedDate === cell.dateStr;
             const isToday = todayStr === cell.dateStr;
+            const isCancelled = planEff?.status === 'CANCELLED';
 
             return (
               <button
@@ -286,33 +457,42 @@ export function CalendarPage({
                   isSelected
                     ? 'border-emerald-600 bg-emerald-50 ring-1 ring-emerald-500'
                     : isToday
-                    ? 'border-blue-300 bg-blue-50/40'
+                    ? 'border-blue-400 bg-blue-50/50'
+                    : planEff?.status === 'PAST_UNLOGGED'
+                    ? 'border-amber-200 bg-amber-50/35 hover:bg-amber-50/60'
                     : 'border-slate-100 hover:bg-slate-50'
                 }`}
               >
                 <span
                   className={`text-xs font-bold ${
-                    isSelected ? 'text-emerald-800' : isToday ? 'text-blue-700' : 'text-slate-700'
+                    isCancelled
+                      ? 'line-through text-slate-400'
+                      : isSelected
+                      ? 'text-emerald-800'
+                      : isToday
+                      ? 'text-blue-700'
+                      : 'text-slate-700'
                   }`}
                 >
                   {cell.dayNum}
                 </span>
 
                 <div className="flex items-center gap-1">
-                  {plan && plan.status !== 'CANCELLED' && (
+                  {planEff && (
                     <span
-                      className={`w-2 h-2 rounded-full ${
-                        plan.status === 'DONE' || hasBadmintonSession
-                          ? 'bg-emerald-600'
-                          : 'bg-sky-500'
-                      }`}
-                      title={plan.status === 'DONE' ? 'Đã đánh xong' : 'Lịch đánh cầu'}
+                      className={`w-2 h-2 rounded-full ${planEff.dotClass}`}
+                      title={planEff.label}
                     />
                   )}
-                  {!plan && hasBadmintonSession && (
-                    <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                  {!planEff && hasFixedBadminton && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-600" title="Đã đánh cố định" />
                   )}
-                  {hasDrinking && <span className="w-2 h-2 rounded-full bg-orange-500" />}
+                  {hasAdhocBadminton && (
+                    <span className="w-2 h-2 rounded-full bg-cyan-500" title="Buổi cầu phát sinh" />
+                  )}
+                  {hasDrinking && (
+                    <span className="w-2 h-2 rounded-full bg-orange-500" title="Có buổi ăn nhậu" />
+                  )}
                 </div>
               </button>
             );
@@ -320,15 +500,27 @@ export function CalendarPage({
         </div>
 
         {/* Chú thích */}
-        <div className="flex items-center justify-center gap-4 pt-3 mt-2 border-t border-slate-100 text-[11px] text-slate-500 flex-wrap">
+        <div className="flex items-center justify-center gap-3 pt-3 mt-2 border-t border-slate-100 text-[11px] text-slate-500 flex-wrap">
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-500" /> Lịch dự kiến
+            <span className="w-2.5 h-2.5 rounded-full bg-sky-500" /> Sắp diễn ra
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" /> Đã điểm danh cầu
+            <span className="w-2.5 h-2.5 rounded-full bg-purple-600" /> Đang diễn ra
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-orange-500" /> Có buổi ăn nhậu
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" /> Đã diễn ra
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Qua ngày chưa ghi
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Nghỉ/Hủy
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-500" /> Phát sinh
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-orange-500" /> Ăn nhậu
           </span>
         </div>
       </section>
@@ -338,36 +530,39 @@ export function CalendarPage({
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div>
             <h3 className="text-sm font-bold text-slate-900">
-              Ngày {formatDateVN(selectedDate)}
+              {WEEKDAY_VN_NAMES[getWeekdayIndex(selectedDate)]}, ngày {formatDateVN(selectedDate)}
+              {selectedDate === todayStr && (
+                <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                  Hôm nay
+                </span>
+              )}
             </h3>
             <p className="text-xs text-slate-500">
               {selectedPlan
-                ? `Lịch đánh: ${selectedPlan.start_time} – ${selectedPlan.end_time} (${selectedPlan.courts} sân)`
+                ? `Lịch cố định: ${selectedPlan.start_time} – ${selectedPlan.end_time} (${selectedPlan.courts} sân)`
                 : 'Chưa có lịch cầu lông cố định ngày này'}
             </p>
           </div>
 
           {isEditor && (
             <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => onCreateAdhocBadmintonOnDate(selectedDate)}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Buổi cầu phát sinh</span>
+              </button>
               {!selectedPlan && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onCreateAdhocBadmintonOnDate(selectedDate)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Buổi cầu phát sinh</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAddDayModalOpen(true)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Lịch cố định</span>
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={handleOpenAddSingleModal}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Lịch cố định</span>
+                </button>
               )}
               <button
                 type="button"
@@ -382,25 +577,31 @@ export function CalendarPage({
         </div>
 
         {/* Thẻ Lịch cầu lông của ngày */}
-        {selectedPlan && (
+        {selectedPlan && selectedPlanStatus && (
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
                 <Trophy className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-bold text-slate-900">
+                <span
+                  className={`text-xs font-bold ${
+                    selectedPlanStatus.status === 'CANCELLED'
+                      ? 'line-through text-slate-400'
+                      : 'text-slate-900'
+                  }`}
+                >
                   {selectedPlan.start_time} – {selectedPlan.end_time} • {selectedPlan.courts} sân
                 </span>
               </div>
               <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  selectedPlan.status === 'DONE'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-sky-100 text-sky-700'
-                }`}
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${selectedPlanStatus.badgeClass}`}
               >
-                {selectedPlan.status === 'DONE' ? 'Đã điểm danh' : 'Sắp diễn ra'}
+                {selectedPlanStatus.label}
               </span>
             </div>
+
+            {selectedPlan.note && (
+              <p className="text-[11px] text-slate-600 italic">Ghi chú: {selectedPlan.note}</p>
+            )}
 
             {selectedPlan.planned_member_ids && (
               <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
@@ -421,32 +622,133 @@ export function CalendarPage({
             )}
 
             {isEditor && (
-              <div className="flex items-center justify-between gap-2 pt-1">
-                {selectedPlan.status !== 'DONE' ? (
-                  <button
-                    type="button"
-                    onClick={() => onCheckInPlan(selectedPlan)}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Điểm danh &amp; Ghi buổi hôm nay</span>
-                  </button>
-                ) : (
-                  <span className="text-xs font-semibold text-emerald-700">
-                    Đã ghi nhận buổi chơi cho ngày này
-                  </span>
+              <div className="space-y-2 pt-1">
+                {(selectedPlanStatus.status === 'UPCOMING' ||
+                  selectedPlanStatus.status === 'ONGOING' ||
+                  selectedPlanStatus.status === 'PAST_UNLOGGED') && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onCheckInPlan(selectedPlan)}
+                      className={`w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-white text-xs font-bold shadow-xs cursor-pointer ${
+                        selectedPlanStatus.status === 'PAST_UNLOGGED'
+                          ? 'bg-amber-600 hover:bg-amber-700'
+                          : 'bg-emerald-600 hover:bg-emerald-700'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {selectedPlanStatus.status === 'PAST_UNLOGGED'
+                          ? 'Ghi bù buổi này (Điểm danh & Vãng lai)'
+                          : 'Điểm danh & Ghi buổi'}
+                      </span>
+                    </button>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditSingleModal(selectedPlan)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Sửa lịch</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleUpdatePlanStatus(selectedPlan, 'DONE')}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Đánh dấu đã đánh</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleUpdatePlanStatus(selectedPlan, 'CANCELLED')}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>Nghỉ / Hủy</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeletePlan(selectedPlan)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 text-[11px] font-semibold cursor-pointer ml-auto"
+                        title="Xóa lịch ngày này"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Xóa</span>
+                      </button>
+                    </div>
+                  </>
                 )}
 
-                {selectedPlan.status !== 'DONE' && (
-                  <button
-                    type="button"
-                    onClick={() => void handleDeletePlan(selectedPlan)}
-                    disabled={busy}
-                    className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
-                    title="Xóa lịch ngày này"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                {selectedPlanStatus.status === 'CANCELLED' && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdatePlanStatus(selectedPlan, 'PLANNED')}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Khôi phục lịch</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeletePlan(selectedPlan)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-semibold cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa</span>
+                    </button>
+                  </div>
+                )}
+
+                {selectedPlanStatus.status === 'DONE' && (
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-emerald-700">
+                      {hasSelectedFixedSession
+                        ? 'Đã ghi nhận điểm danh buổi cố định.'
+                        : 'Đã đánh dấu hoàn thành buổi theo lịch.'}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditSingleModal(selectedPlan)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>Sửa</span>
+                      </button>
+                      {!hasSelectedFixedSession && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onCheckInPlan(selectedPlan)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Điểm danh bù</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleUpdatePlanStatus(selectedPlan, 'PLANNED')}
+                            disabled={busy}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Mở lại</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -457,34 +759,59 @@ export function CalendarPage({
         {selectedDaySessions.length > 0 && (
           <div className="space-y-2">
             <p className="text-[11px] font-bold text-slate-400 uppercase">Hoạt động thực tế</p>
-            {selectedDaySessions.map((s) => (
-              <div
-                key={s.session_id}
-                className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  {s.type === 'BADMINTON' ? (
-                    <Trophy className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <Utensils className="w-4 h-4 text-orange-500 shrink-0" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="font-bold text-slate-900 truncate">{s.title}</p>
-                      {s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC' && (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 shrink-0">
-                          Phát sinh
-                        </span>
-                      )}
+            {selectedDaySessions.map((s) => {
+              const isFixedBadminton = s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC';
+              return (
+                <div
+                  key={s.session_id}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {s.type === 'BADMINTON' ? (
+                      <Trophy className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <Utensils className="w-4 h-4 text-orange-500 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-bold text-slate-900 truncate">{s.title}</p>
+                        {s.type === 'BADMINTON' && (
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                              s.billing_mode === 'AD_HOC'
+                                ? 'bg-cyan-100 text-cyan-800'
+                                : 'bg-emerald-50 text-emerald-700'
+                            }`}
+                          >
+                            {s.billing_mode === 'AD_HOC' ? 'Phát sinh' : 'Theo lịch'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500">{s.attendee_count} người tham gia</p>
                     </div>
-                    <p className="text-[11px] text-slate-500">{s.attendee_count} người tham gia</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-bold text-slate-900">
+                      {isFixedBadminton
+                        ? s.total_amount > 0
+                          ? `Thêm giờ: ${formatVND(s.total_amount)}`
+                          : 'Theo lịch (0đ)'
+                        : formatVND(s.total_amount)}
+                    </span>
+                    {isEditor && onEditSession && (
+                      <button
+                        type="button"
+                        onClick={() => onEditSession(s)}
+                        className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                        title="Chỉnh sửa buổi này"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
-                <span className="font-bold text-slate-900 shrink-0">
-                  {formatVND(s.total_amount)}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -581,6 +908,16 @@ export function CalendarPage({
               </div>
             </div>
 
+            <label className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={onlyFromToday}
+                onChange={(e) => setOnlyFromToday(e.target.checked)}
+                className="accent-emerald-600"
+              />
+              <span>Chỉ tạo từ hôm nay ({formatDateVN(todayStr)}) trở đi</span>
+            </label>
+
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                 Thành viên chính dự kiến ({plannedIds.length}/{mainMembers.length})
@@ -624,50 +961,105 @@ export function CalendarPage({
         </div>
       )}
 
-      {/* Modal thêm 1 ngày lẻ */}
-      {addDayModalOpen && isEditor && (
+      {/* Modal Thêm / Sửa 1 ngày lịch lẻ */}
+      {dayModalOpen && isEditor && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={() => setAddDayModalOpen(false)}
+          onClick={() => {
+            setDayModalOpen(false);
+            setEditingPlan(null);
+          }}
         >
           <form
-            onSubmit={handleAddSingleDay}
+            onSubmit={handleSaveSingleDay}
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-3.5"
+            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-3.5 max-h-[90vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900">
-                Thêm lịch ngày {formatDateVN(selectedDate)}
+                {editingPlan
+                  ? `Sửa lịch ngày ${formatDateVN(editingPlan.date)}`
+                  : `Thêm lịch ngày ${formatDateVN(selectedDate)}`}
               </h3>
               <button
                 type="button"
-                onClick={() => setAddDayModalOpen(false)}
+                onClick={() => {
+                  setDayModalOpen(false);
+                  setEditingPlan(null);
+                }}
                 className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              <input
-                type="time"
-                value={singleStart}
-                onChange={(e) => setSingleStart(e.target.value)}
-                className="rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-              />
-              <input
-                type="time"
-                value={singleEnd}
-                onChange={(e) => setSingleEnd(e.target.value)}
-                className="rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-              />
-              <input
-                type="number"
-                min={1}
-                value={singleCourts}
-                onChange={(e) => setSingleCourts(e.target.value)}
-                className="rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-              />
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Bắt đầu
+                </label>
+                <input
+                  type="time"
+                  value={singleStart}
+                  onChange={(e) => setSingleStart(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Kết thúc
+                </label>
+                <input
+                  type="time"
+                  value={singleEnd}
+                  onChange={(e) => setSingleEnd(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Số sân
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={singleCourts}
+                  onChange={(e) => setSingleCourts(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
+                />
+              </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                Thành viên chính dự kiến ({singlePlannedIds.length}/{mainMembers.length})
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+                {mainMembers.map((m) => {
+                  const checked = singlePlannedIds.includes(m.member_id);
+                  return (
+                    <label
+                      key={m.member_id}
+                      className="flex items-center gap-2 text-xs font-semibold bg-slate-50 px-2.5 py-1.5 rounded-lg cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSinglePlannedIds((prev) =>
+                            prev.includes(m.member_id)
+                              ? prev.filter((id) => id !== m.member_id)
+                              : [...prev, m.member_id]
+                          )
+                        }
+                        className="accent-emerald-600"
+                      />
+                      <span className="truncate">{m.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
             <input
               type="text"
               value={singleNote}
@@ -678,9 +1070,10 @@ export function CalendarPage({
             <button
               type="submit"
               disabled={busy}
-              className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
+              className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
             >
-              {busy ? 'Đang lưu...' : 'Lưu vào lịch'}
+              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{busy ? 'Đang lưu...' : 'Lưu vào lịch'}</span>
             </button>
           </form>
         </div>

@@ -109,19 +109,25 @@ export function CreateSessionPage({
     editingSession?.payer_id || defaultTreasurerId
   );
 
-  // Chi phí Cầu lông (Tiền sân + Tiền cầu + Khác + Sân thêm giờ)
+  // Chi phí Cầu lông:
+  // - Buổi cố định (MONTHLY): mặc định 0đ (không sinh Sân chính), chỉ tính Vãng lai + Sân thêm giờ (nếu đông)
+  // - Buổi phát sinh (AD_HOC): tính đủ Tiền sân + Tiền cầu + Chi phí khác
   const defaultHours = prefillPlan
     ? calculateDurationHours(prefillPlan.start_time, prefillPlan.end_time) || settings.default_play_hours || 1.5
     : settings.default_play_hours || 1.5;
 
-  const [courtLines, setCourtLines] = useState<CourtLineItem[]>(() => [
-    {
-      label: 'Sân chính',
-      courts: prefillPlan?.courts || settings.default_court_count || 2,
-      hours: defaultHours,
-      pricePerHour: settings.court_price_per_hour || 0,
-    },
-  ]);
+  const [courtLines, setCourtLines] = useState<CourtLineItem[]>(() =>
+    !editingSession && initialAdhoc
+      ? [
+          {
+            label: 'Sân chính',
+            courts: settings.default_court_count || 2,
+            hours: defaultHours,
+            pricePerHour: settings.court_price_per_hour || 0,
+          },
+        ]
+      : []
+  );
   const [courtOverride, setCourtOverride] = useState<boolean>(false);
   const [manualCourtStr, setManualCourtStr] = useState<string>('0');
   const [shuttleQtyStr, setShuttleQtyStr] = useState<string>('0');
@@ -194,8 +200,12 @@ export function CreateSessionPage({
       if (editingSession.cost_detail) {
         try {
           const parsed = JSON.parse(editingSession.cost_detail) as BadmintonCostDetail;
-          if (Array.isArray(parsed.courtLines) && parsed.courtLines.length > 0) {
-            setCourtLines(parsed.courtLines);
+          if (Array.isArray(parsed.courtLines)) {
+            if (isAdhocEdit) {
+              setCourtLines(parsed.courtLines);
+            } else {
+              setCourtLines(parsed.courtLines.filter((l) => l.isExtra || (l.amount ?? 0) > 0));
+            }
           }
           setShuttlePriceStr(String(parsed.shuttlePrice ?? settings.shuttle_price ?? 0));
           setCourtOverride(Boolean(parsed.courtOverride));
@@ -204,13 +214,15 @@ export function CreateSessionPage({
         } catch {
           // Fallback below
         }
+      } else if (!isAdhocEdit && editingSession.total_amount === 0 && editingSession.court_amount === 0) {
+        setCourtLines([]);
       }
       setManualCourtStr(String(editingSession.court_amount || 0));
       setShuttleQtyStr(String(editingSession.shuttle_qty || 0));
       setManualShuttleStr(String(editingSession.shuttle_amount || 0));
       setOtherAmountStr(String(editingSession.other_amount || 0));
       setManualTotalStr(String(editingSession.total_amount || 0));
-      if (!editingSession.cost_detail && editingSession.total_amount > 0 && editingSession.court_amount === 0) {
+      if (isAdhocEdit && !editingSession.cost_detail && editingSession.total_amount > 0 && editingSession.court_amount === 0) {
         setTotalOverride(true);
       }
     }
@@ -340,6 +352,31 @@ export function CreateSessionPage({
     );
   };
 
+  const handleToggleBillingMode = (nextAdhoc: boolean) => {
+    const nextMode: BadmintonBillingMode = nextAdhoc ? 'AD_HOC' : 'MONTHLY';
+    setBillingMode(nextMode);
+    if (nextMode === 'AD_HOC') {
+      setCourtLines((prev) => {
+        if (prev.some((l) => !l.isExtra)) return prev;
+        return [
+          {
+            label: 'Sân chính',
+            courts: prefillPlan?.courts || settings.default_court_count || 2,
+            hours: defaultHours,
+            pricePerHour: settings.court_price_per_hour || 0,
+          },
+          ...prev,
+        ];
+      });
+    } else {
+      setCourtLines((prev) => prev.filter((l) => l.isExtra));
+      setShuttleQtyStr('0');
+      setOtherAmountStr('0');
+      setShuttleOverride(false);
+      setTotalOverride(false);
+    }
+  };
+
   const handleAddExtraCourtLine = () => {
     setCourtLines((prev) => [
       ...prev,
@@ -358,7 +395,13 @@ export function CreateSessionPage({
   };
 
   const handleRemoveCourtLine = (idx: number) => {
-    setCourtLines((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)));
+    setCourtLines((prev) =>
+      billingMode === 'MONTHLY'
+        ? prev.filter((_, i) => i !== idx)
+        : prev.length <= 1
+        ? prev
+        : prev.filter((_, i) => i !== idx)
+    );
   };
 
   const handleAddDrinkingItem = (kind: SessionItemKind = 'ITEM') => {
@@ -401,8 +444,13 @@ export function CreateSessionPage({
 
       if (res.total_amount > 0) {
         if (sessionType === 'BADMINTON') {
-          setTotalOverride(true);
-          setManualTotalStr(String(res.total_amount));
+          if (billingMode === 'MONTHLY') {
+            setCourtOverride(true);
+            setManualCourtStr(String(res.total_amount));
+          } else {
+            setTotalOverride(true);
+            setManualTotalStr(String(res.total_amount));
+          }
         } else {
           setDrinkingItems((prev) => {
             if (prev.length === 0) {
@@ -465,6 +513,11 @@ export function CreateSessionPage({
       return;
     }
 
+    if (sessionType === 'BADMINTON' && billingMode === 'AD_HOC' && badmintonCost.totalAmount <= 0) {
+      setErrorMsg('Buổi cầu phát sinh cần có tổng tiền buổi > 0đ.');
+      return;
+    }
+
     if (sessionType === 'DRINKING' && drinkingSplitPreview.totalAmount <= 0) {
       setErrorMsg('Buổi Ăn nhậu cần có ít nhất 1 khoản hóa đơn / góp món > 0đ.');
       return;
@@ -478,6 +531,17 @@ export function CreateSessionPage({
         ? `Nhậu tại nhà ${date}`
         : `Ăn nhậu ${date}`);
 
+    const monthlyExtraCourtAmount = courtOverride
+      ? Math.max(0, Math.round(Number(manualCourtStr) || 0))
+      : badmintonCost.calculatedCourtAmount;
+    const monthlyExtraCostDetail: BadmintonCostDetail = {
+      courtLines: badmintonCost.courtLines.filter((l) => l.isExtra),
+      shuttlePrice: 0,
+      courtOverride,
+      shuttleOverride: false,
+      totalOverride: false,
+    };
+
     setSubmitting(true);
     setErrorMsg(null);
 
@@ -488,15 +552,21 @@ export function CreateSessionPage({
               date,
               type: 'BADMINTON' as const,
               title: finalTitle,
-              totalAmount: badmintonCost.totalAmount,
+              totalAmount:
+                billingMode === 'MONTHLY' ? monthlyExtraCourtAmount : badmintonCost.totalAmount,
               guestFee: billingMode === 'MONTHLY' ? guestFee : 0,
               billingMode,
               payerId: billingMode === 'AD_HOC' ? badmintonPayerId || defaultTreasurerId : undefined,
-              courtAmount: badmintonCost.courtAmount,
-              shuttleQty: Math.max(0, Math.round(Number(shuttleQtyStr) || 0)),
-              shuttleAmount: badmintonCost.shuttleAmount,
-              otherAmount: badmintonCost.otherAmount,
-              costDetail: badmintonCost.detail,
+              courtAmount:
+                billingMode === 'MONTHLY' ? monthlyExtraCourtAmount : badmintonCost.courtAmount,
+              shuttleQty:
+                billingMode === 'MONTHLY'
+                  ? 0
+                  : Math.max(0, Math.round(Number(shuttleQtyStr) || 0)),
+              shuttleAmount: billingMode === 'MONTHLY' ? 0 : badmintonCost.shuttleAmount,
+              otherAmount: billingMode === 'MONTHLY' ? 0 : badmintonCost.otherAmount,
+              costDetail:
+                billingMode === 'MONTHLY' ? monthlyExtraCostDetail : badmintonCost.detail,
               planId: planId || undefined,
               receiptDriveId,
               receiptUrl,
@@ -641,7 +711,7 @@ export function CreateSessionPage({
             <input
               type="checkbox"
               checked={billingMode === 'AD_HOC'}
-              onChange={(e) => setBillingMode(e.target.checked ? 'AD_HOC' : 'MONTHLY')}
+              onChange={(e) => handleToggleBillingMode(e.target.checked)}
               className="mt-0.5 w-4 h-4 accent-sky-600"
             />
             <div className="min-w-0">
@@ -719,8 +789,193 @@ export function CreateSessionPage({
         </div>
       </section>
 
-      {/* 2A. CHI PHÍ CẦU LÔNG (SÂN + SÂN THÊM GIỜ + CẦU + KHÁC) */}
-      {sessionType === 'BADMINTON' && (
+      {/* 2A. CHI PHÍ CẦU LÔNG */}
+      {sessionType === 'BADMINTON' && billingMode === 'MONTHLY' && (
+        <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3.5 shadow-xs">
+          <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-emerald-900">
+            <p className="font-bold">Buổi đánh theo lịch cố định (đã thu đầu tháng)</p>
+            <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
+              Thành viên chính <strong>không phát sinh tiền buổi</strong> — chỉ tính phí{' '}
+              <strong>Vãng lai theo buổi</strong> và <strong>Sân thêm giờ</strong> nếu đông phải thuê thêm.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Phí Vãng lai buổi này (VND)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={5000}
+                value={guestFeeStr}
+                onChange={(e) => setGuestFeeStr(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Ghi chú thêm giờ / vãng lai
+              </label>
+              <input
+                type="text"
+                value={receiptSummary}
+                onChange={(e) => setReceiptSummary(e.target.value)}
+                placeholder="VD: Thu thêm 1h sân 3 do đông vãng lai"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-slate-100 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                  Sân thêm giờ (tùy chọn — mặc định 0đ)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Chỉ bấm khi hôm nay đông vãng lai phải thuê thêm sân hoặc thêm giờ
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddExtraCourtLine}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold cursor-pointer shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Sân thêm giờ</span>
+              </button>
+            </div>
+
+            {courtLines.length === 0 && !courtOverride ? (
+              <div className="rounded-xl bg-slate-50 border border-dashed border-slate-200 px-3 py-2.5 flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span>Không có sân thêm giờ (0đ)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCourtOverride(true);
+                    setManualCourtStr('0');
+                  }}
+                  className="text-[11px] font-semibold text-emerald-700 hover:underline cursor-pointer"
+                >
+                  Hoặc tự nhập số tiền
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {courtLines.map((line, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <input
+                        type="text"
+                        value={line.label}
+                        onChange={(e) => handleUpdateCourtLine(idx, { label: e.target.value })}
+                        className="text-xs font-bold text-slate-800 bg-transparent border-b border-transparent focus:border-emerald-500 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-emerald-700">
+                          {formatVND(calculateCourtLineAmount(line))}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCourtLine(idx)}
+                          className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                          aria-label="Xóa dòng sân thêm giờ"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-500 mb-0.5">Số sân</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={line.courts}
+                          onChange={(e) =>
+                            handleUpdateCourtLine(idx, { courts: Number(e.target.value) || 0 })
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 mb-0.5">Số giờ</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          value={line.hours}
+                          onChange={(e) =>
+                            handleUpdateCourtLine(idx, { hours: Number(e.target.value) || 0 })
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 mb-0.5">Giá/giờ (đ)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={5000}
+                          value={line.pricePerHour}
+                          onChange={(e) =>
+                            handleUpdateCourtLine(idx, { pricePerHour: Number(e.target.value) || 0 })
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-600">
+                      Tiền sân thêm giờ {courtOverride ? '(Nhập tay)' : '(Tự tính)'}
+                    </label>
+                    {courtOverride && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCourtOverride(false);
+                          setManualCourtStr('0');
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>{courtLines.length > 0 ? 'Tự tính lại' : 'Đưa về 0đ'}</span>
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1000}
+                    value={
+                      courtOverride ? manualCourtStr : String(badmintonCost.calculatedCourtAmount)
+                    }
+                    onChange={(e) => {
+                      setCourtOverride(true);
+                      setManualCourtStr(e.target.value);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* 2A. CHI PHÍ CẦU LÔNG PHÁT SINH (SÂN + SÂN THÊM GIỜ + CẦU + KHÁC) */}
+      {sessionType === 'BADMINTON' && billingMode === 'AD_HOC' && (
         <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3.5 shadow-xs">
           <div className="flex items-center justify-between gap-2">
             <div>
@@ -845,50 +1100,32 @@ export function CreateSessionPage({
               />
             </div>
 
-            {billingMode === 'MONTHLY' ? (
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Phí Vãng lai buổi này (VND)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={5000}
-                  value={guestFeeStr}
-                  onChange={(e) => setGuestFeeStr(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
-                />
-              </div>
-            ) : (
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Người ứng tiền sân/cầu
-                </label>
-                <select
-                  value={badmintonPayerId}
-                  onChange={(e) => setBadmintonPayerId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
-                >
-                  {activeMembers.map((m) => (
-                    <option key={m.member_id} value={m.member_id}>
-                      {m.name} {m.member_id === defaultTreasurerId ? '(Thủ quỹ)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Người ứng tiền sân/cầu
+              </label>
+              <select
+                value={badmintonPayerId}
+                onChange={(e) => setBadmintonPayerId(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
+              >
+                {activeMembers.map((m) => (
+                  <option key={m.member_id} value={m.member_id}>
+                    {m.name} {m.member_id === defaultTreasurerId ? '(Thủ quỹ)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {billingMode === 'AD_HOC' && (
-            <div className="rounded-xl bg-sky-50 border border-sky-200 px-3 py-2.5 flex items-center justify-between gap-2 text-xs">
-              <span className="text-sky-900 font-medium">
-                Chia đều {totalBadmintonAttendees} người (làm tròn lên 1.000đ):
-              </span>
-              <span className="font-extrabold text-sky-700 text-sm">
-                {formatVND(adhocPerPerson)} / người
-              </span>
-            </div>
-          )}
+          <div className="rounded-xl bg-sky-50 border border-sky-200 px-3 py-2.5 flex items-center justify-between gap-2 text-xs">
+            <span className="text-sky-900 font-medium">
+              Chia đều {totalBadmintonAttendees} người (làm tròn lên 1.000đ):
+            </span>
+            <span className="font-extrabold text-sky-700 text-sm">
+              {formatVND(adhocPerPerson)} / người
+            </span>
+          </div>
 
           {/* Tiền quả cầu */}
           <div className="grid grid-cols-3 gap-2">
@@ -1286,9 +1523,23 @@ export function CreateSessionPage({
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-slate-900">Xem trước kết quả</h3>
           {sessionType === 'BADMINTON' ? (
-            <span className="text-xs font-bold text-emerald-700">
-              Tổng chi buổi: {formatVND(badmintonCost.totalAmount)}
-            </span>
+            billingMode === 'MONTHLY' ? (
+              <span className="text-xs font-bold text-emerald-700">
+                {(courtOverride
+                  ? Math.max(0, Math.round(Number(manualCourtStr) || 0))
+                  : badmintonCost.calculatedCourtAmount) > 0
+                  ? `Sân thêm giờ: ${formatVND(
+                      courtOverride
+                        ? Math.max(0, Math.round(Number(manualCourtStr) || 0))
+                        : badmintonCost.calculatedCourtAmount
+                    )}`
+                  : 'Theo lịch (0đ)'}
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-emerald-700">
+                Tổng chi buổi: {formatVND(badmintonCost.totalAmount)}
+              </span>
+            )
           ) : (
             <span className="text-xs font-bold text-orange-600">
               {formatVND(drinkingSplitPreview.perPersonAmount)}/người

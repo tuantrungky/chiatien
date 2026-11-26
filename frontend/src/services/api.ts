@@ -41,7 +41,7 @@ import type {
   UpsertMemberPayload,
   VerifyEditorResponse,
 } from '../types';
-import { getPeriodRange, getTodayDateStr } from '../utils/dateFilters';
+import { getNowVN, getPeriodRange, getTodayDateStr } from '../utils/dateFilters';
 import { calculateAdhocPerPerson } from '../utils/badmintonCost';
 import { buildBadmintonDues, simplifyDebts } from '../utils/debtSimplifier';
 import { calculateDrinkingSplit } from '../utils/drinkingSplit';
@@ -92,7 +92,8 @@ const mockState = {
 };
 
 function nowIso(): string {
-  return new Date().toISOString();
+  const vn = getNowVN();
+  return `${vn.date}T${vn.time}:00+07:00`;
 }
 
 function mockDelay<T>(value: T, ms = 140): Promise<T> {
@@ -161,8 +162,25 @@ function prevMonthStr(monthStr: string): string {
 }
 
 function buildMockSchedule(month: string): ScheduleData {
+  const fixedByDate = new Map<string, (typeof mockState.sessions)[number]>();
+  for (const s of mockState.sessions) {
+    if (s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC' && s.date.slice(0, 7) === month) {
+      if (!fixedByDate.has(s.date)) fixedByDate.set(s.date, s);
+    }
+  }
   const days = mockState.schedule
     .filter((d) => d.date.slice(0, 7) === month)
+    .map((d) => {
+      const matched = fixedByDate.get(d.date);
+      if (d.status !== 'CANCELLED' && matched) {
+        return {
+          ...d,
+          status: 'DONE' as const,
+          session_id: d.session_id || matched.session_id,
+        };
+      }
+      return d;
+    })
     .sort((a, b) => a.date.localeCompare(b.date));
   return { month, days };
 }
@@ -296,6 +314,35 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     };
   });
 
+  const prevMonth = prevMonthStr(month);
+  let suggestedPrevOvertime = 0;
+  for (const s of mockState.sessions) {
+    if (s.type !== 'BADMINTON' || s.billing_mode === 'AD_HOC' || s.date.slice(0, 7) !== prevMonth) continue;
+    if (s.cost_detail) {
+      try {
+        const parsed = JSON.parse(s.cost_detail) as {
+          courtLines?: Array<{ isExtra?: boolean; amount?: number; courts?: number; hours?: number; pricePerHour?: number }>;
+        };
+        if (Array.isArray(parsed.courtLines)) {
+          for (const line of parsed.courtLines) {
+            if (!line?.isExtra) continue;
+            const amt =
+              line.amount !== undefined
+                ? Number(line.amount) || 0
+                : Math.round((Number(line.courts) || 0) * (Number(line.hours) || 0) * (Number(line.pricePerHour) || 0));
+            suggestedPrevOvertime += Math.max(0, amt);
+          }
+          continue;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    if (s.court_amount > 0 && s.shuttle_amount === 0 && s.other_amount === 0) {
+      suggestedPrevOvertime += s.court_amount;
+    }
+  }
+
   return {
     month,
     bill,
@@ -303,6 +350,7 @@ function buildMockMonthlyBill(month: string): MonthlyBillData {
     sessions: sessionsInMonth,
     guestIncomeDetail: { paidCount, paidAmount, unpaidAmount },
     suggestedEstimateFromSchedule: suggestedEstimate,
+    suggestedPrevOvertime,
     contributions: parseContributionsSafe(billRow?.shuttle_contributions),
     prevMonthContributions: [
       ...parseContributionsSafe(prevRow?.shuttle_contributions),
@@ -873,6 +921,11 @@ export async function createSession(
 
   const resolvedPayerId =
     sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' ? treasurerId : payerId;
+  const resolvedPlanId =
+    payload.planId ||
+    (sessionType === 'BADMINTON' && billingMode !== 'AD_HOC'
+      ? mockState.schedule.find((d) => d.date === payload.date && d.status !== 'CANCELLED')?.plan_id || ''
+      : '');
   const session = {
     session_id: sessionId,
     date: payload.date,
@@ -894,7 +947,7 @@ export async function createSession(
     other_amount: sessionType === 'BADMINTON' ? payload.otherAmount || 0 : 0,
     cost_detail: payload.costDetail ? JSON.stringify(payload.costDetail) : '',
     venue_type: sessionType === 'DRINKING' ? payload.venueType || 'RESTAURANT' : ('' as const),
-    plan_id: payload.planId || '',
+    plan_id: resolvedPlanId,
     billing_mode: billingMode,
     created_by: 'tuantrungky@gmail.com',
     created_at: now,
@@ -904,8 +957,8 @@ export async function createSession(
   mockState.sessions.push(session);
   mockState.attendances.push(...newAttendances);
 
-  if (payload.planId) {
-    const plan = mockState.schedule.find((d) => d.plan_id === payload.planId);
+  if (resolvedPlanId) {
+    const plan = mockState.schedule.find((d) => d.plan_id === resolvedPlanId);
     if (plan) {
       plan.status = 'DONE';
       plan.session_id = sessionId;
@@ -1093,10 +1146,17 @@ export async function generateSchedule(
   if (!IS_MOCK_MODE) {
     return gasPost<ScheduleData>('generateSchedule', idToken, payload);
   }
-  const dates = generateMonthScheduleDates(payload.month, payload.weekdays);
+  const dates = generateMonthScheduleDates(payload.month, payload.weekdays, payload.fromDate);
   const existingDates = new Set(mockState.schedule.map((d) => d.date));
+  const fixedByDate = new Map<string, (typeof mockState.sessions)[number]>();
+  for (const s of mockState.sessions) {
+    if (s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC' && s.date.slice(0, 7) === payload.month) {
+      if (!fixedByDate.has(s.date)) fixedByDate.set(s.date, s);
+    }
+  }
   for (const d of dates) {
     if (existingDates.has(d)) continue;
+    const matched = fixedByDate.get(d);
     mockState.schedule.push({
       plan_id: `PLN_MOCK_${d}`,
       date: d,
@@ -1104,8 +1164,8 @@ export async function generateSchedule(
       end_time: payload.endTime,
       courts: payload.courts,
       planned_member_ids: payload.plannedMemberIds.join(','),
-      status: 'PLANNED',
-      session_id: '',
+      status: matched ? 'DONE' : 'PLANNED',
+      session_id: matched?.session_id || '',
       note: payload.note || '',
     });
   }

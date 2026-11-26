@@ -5,8 +5,49 @@
 
 import type { PeriodRange, PeriodType } from '../types';
 
+export const VN_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+const VN_DATETIME_PARTS = new Intl.DateTimeFormat('en-GB', {
+  timeZone: VN_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * Lấy ngày (YYYY-MM-DD) và giờ (HH:mm) hiện tại theo múi giờ Việt Nam (Asia/Ho_Chi_Minh),
+ * độc lập hoàn toàn với múi giờ cài đặt trên máy/trình duyệt người dùng.
+ */
+export function getNowVN(date: Date = new Date()): { date: string; time: string } {
+  const parts = VN_DATETIME_PARTS.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value;
+  }
+  const hh = map.hour === '24' ? '00' : map.hour || '00';
+  const mm = map.minute || '00';
+  return {
+    date: `${map.year}-${map.month}-${map.day}`,
+    time: `${hh}:${mm}`,
+  };
+}
+
+export function formatTimeVN(ts: number | Date): string {
+  const d = ts instanceof Date ? ts : new Date(ts);
+  return getNowVN(d).time;
+}
+
+export function getWeekdayIndex(dateStr: string): number {
+  const match = String(dateStr || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return 0;
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
 }
 
 export function formatYmd(d: Date): string {
@@ -16,14 +57,13 @@ export function formatYmd(d: Date): string {
 export function parseYmd(dateStr: string): Date {
   const match = String(dateStr || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return parseYmd(getNowVN().date);
   }
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
-export function getTodayDateStr(): string {
-  return formatYmd(new Date());
+export function getTodayDateStr(date?: Date): string {
+  return getNowVN(date).date;
 }
 
 /**

@@ -450,6 +450,7 @@ export interface MonthlyBillData {
     unpaidAmount: number;
   };
   suggestedEstimateFromSchedule: number;
+  suggestedPrevOvertime?: number;
   contributions?: ShuttleContributionItem[];
   prevMonthContributions?: ShuttleContributionItem[];
 }
@@ -630,6 +631,7 @@ export interface GenerateSchedulePayload {
   endTime: string;
   courts: number;
   plannedMemberIds: string[];
+  fromDate?: string;
   note?: string;
 }
 

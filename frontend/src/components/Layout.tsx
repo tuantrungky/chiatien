@@ -15,6 +15,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { IS_MOCK_MODE } from '../services/api';
 import type { Member } from '../types';
+import { formatTimeVN } from '../utils/dateFilters';
 import { EditorLoginButton } from './EditorLoginButton';
 
 export type ActiveTab = 'dashboard' | 'calendar' | 'debts' | 'monthly' | 'create' | 'settings';
@@ -76,10 +77,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
 
 function formatSyncTime(ts: number | null): string {
   if (!ts) return 'Chưa đồng bộ';
-  const d = new Date(ts);
-  const hh = d.getHours() < 10 ? `0${d.getHours()}` : String(d.getHours());
-  const mm = d.getMinutes() < 10 ? `0${d.getMinutes()}` : String(d.getMinutes());
-  return `Cập nhật lúc ${hh}:${mm}`;
+  return `Cập nhật lúc ${formatTimeVN(ts)}`;
 }
 
 export function Layout({
