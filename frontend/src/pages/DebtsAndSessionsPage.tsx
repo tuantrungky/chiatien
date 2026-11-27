@@ -510,9 +510,9 @@ export function DebtsAndSessionsPage({
   const drinkingHiddenCount = Math.max(0, visibleDrinkingTransfers.length - DEBTS_LIST_LIMIT);
 
   // Giới hạn tối đa 8 dòng cầu lông khi chưa mở rộng (giữ đúng thứ tự monthly -> guest -> adhoc)
-  const monthlyLimit = showAllBadminton ? visibleMonthlyDues.length : DEBTS_LIST_LIMIT;
-  const slicedMonthlyDues = visibleMonthlyDues.slice(0, monthlyLimit);
-  const remainingAfterMonthly = Math.max(0, monthlyLimit - slicedMonthlyDues.length);
+  const badmintonVisibleLimit = showAllBadminton ? allBadmintonRowsCount : DEBTS_LIST_LIMIT;
+  const slicedMonthlyDues = visibleMonthlyDues.slice(0, badmintonVisibleLimit);
+  const remainingAfterMonthly = Math.max(0, badmintonVisibleLimit - slicedMonthlyDues.length);
   const slicedGuestDues = visibleGuestDues.slice(0, remainingAfterMonthly);
   const remainingAfterGuest = Math.max(0, remainingAfterMonthly - slicedGuestDues.length);
   const slicedAdhocDues = visibleAdhocDues.slice(0, remainingAfterGuest);
@@ -1560,7 +1560,7 @@ export function DebtsAndSessionsPage({
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {detail.attendances.map((a) => {
-                                const drinkNet = a.net_amount || a.fee_amount;
+                                const drinkNet = a.net_amount ?? a.fee_amount;
                                 return (
                                   <div
                                     key={a.attendance_id}
@@ -1614,7 +1614,9 @@ export function DebtsAndSessionsPage({
                                       )
                                     ) : a.is_paid ? (
                                       <span className="font-semibold text-emerald-700 shrink-0">
-                                        {drinkNet === 0
+                                        {a.settlement_id
+                                          ? 'Đã tất toán'
+                                          : drinkNet === 0
                                           ? 'Hòa (0đ)'
                                           : 'Đã tất toán'}
                                       </span>
