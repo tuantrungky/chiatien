@@ -622,7 +622,28 @@ export function CreateSessionPage({
               type: 'DRINKING' as const,
               title: finalTitle,
               totalAmount: drinkingSplitPreview.totalAmount,
-              payerId: drinkingItems[0]?.member_id || defaultTreasurerId,
+              payerId: (() => {
+                const billTotals = new Map<string, number>();
+                const anyTotals = new Map<string, number>();
+                for (const it of drinkingItems) {
+                  const amt = Math.max(0, Number(it.amount) || 0);
+                  if (!it.member_id || amt <= 0) continue;
+                  anyTotals.set(it.member_id, (anyTotals.get(it.member_id) || 0) + amt);
+                  if (it.kind === 'BILL') {
+                    billTotals.set(it.member_id, (billTotals.get(it.member_id) || 0) + amt);
+                  }
+                }
+                const sourceMap = billTotals.size > 0 ? billTotals : anyTotals;
+                let bestId = '';
+                let bestAmt = -1;
+                for (const [mId, amt] of sourceMap.entries()) {
+                  if (amt > bestAmt) {
+                    bestAmt = amt;
+                    bestId = mId;
+                  }
+                }
+                return bestId || drinkingItems[0]?.member_id || defaultTreasurerId;
+              })(),
               venueType,
               items: drinkingItems.filter((it) => it.amount > 0 && it.member_id),
               receiptDriveId,
@@ -1327,10 +1348,39 @@ export function CreateSessionPage({
 
           {/* Danh sách đóng góp (Hóa đơn quán / Món góp) */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-700">
-                Danh sách thanh toán &amp; góp món ({formatVND(drinkingSplitPreview.totalAmount)})
-              </label>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block">
+                  Danh sách thanh toán &amp; góp món ({formatVND(drinkingSplitPreview.totalAmount)})
+                </label>
+                {(() => {
+                  const billTotals = new Map<string, number>();
+                  const anyTotals = new Map<string, number>();
+                  for (const item of drinkingItems) {
+                    const amt = Math.max(0, Number(item.amount) || 0);
+                    if (!item.member_id || amt <= 0) continue;
+                    anyTotals.set(item.member_id, (anyTotals.get(item.member_id) || 0) + amt);
+                    if (item.kind === 'BILL') {
+                      billTotals.set(item.member_id, (billTotals.get(item.member_id) || 0) + amt);
+                    }
+                  }
+                  const src = billTotals.size > 0 ? billTotals : anyTotals;
+                  let topId = drinkingItems[0]?.member_id || '';
+                  let topAmt = -1;
+                  for (const [mId, amt] of src.entries()) {
+                    if (amt > topAmt) {
+                      topAmt = amt;
+                      topId = mId;
+                    }
+                  }
+                  const payerName = activeMembers.find((m) => m.member_id === topId)?.name;
+                  return payerName ? (
+                    <p className="text-[11px] font-semibold text-orange-700 mt-0.5">
+                      Người ứng tiền chính: {payerName}
+                    </p>
+                  ) : null;
+                })()}
+              </div>
               <button
                 type="button"
                 onClick={() => handleAddDrinkingItem('ITEM')}
@@ -1347,27 +1397,37 @@ export function CreateSessionPage({
                 className="rounded-xl bg-slate-50 border border-slate-200 p-2.5 space-y-2"
               >
                 <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={it.member_id}
-                    onChange={(e) => handleUpdateDrinkingItem(idx, { member_id: e.target.value })}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
-                  >
-                    {activeMembers.map((m) => (
-                      <option key={m.member_id} value={m.member_id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={it.kind}
-                    onChange={(e) =>
-                      handleUpdateDrinkingItem(idx, { kind: e.target.value as SessionItemKind })
-                    }
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
-                  >
-                    <option value="BILL">Trả hóa đơn quán</option>
-                    <option value="ITEM">Góp món / đồ uống</option>
-                  </select>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                      Người ứng tiền / góp món
+                    </label>
+                    <select
+                      value={it.member_id}
+                      onChange={(e) => handleUpdateDrinkingItem(idx, { member_id: e.target.value })}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
+                    >
+                      {activeMembers.map((m) => (
+                        <option key={m.member_id} value={m.member_id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                      Loại khoản chi
+                    </label>
+                    <select
+                      value={it.kind}
+                      onChange={(e) =>
+                        handleUpdateDrinkingItem(idx, { kind: e.target.value as SessionItemKind })
+                      }
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
+                    >
+                      <option value="BILL">Trả hóa đơn quán</option>
+                      <option value="ITEM">Góp món / đồ uống</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">

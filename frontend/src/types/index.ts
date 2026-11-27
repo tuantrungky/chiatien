@@ -525,6 +525,7 @@ export interface DebtBreakdownSession {
   amount: number; // > 0 số tiền phải trả của người nợ ở buổi đó
   contributedAmount: number;
   perPersonAmount: number;
+  payerName?: string;
 }
 
 export interface SimplifiedTransferDetail {

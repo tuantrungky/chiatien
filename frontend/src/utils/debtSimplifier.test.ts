@@ -393,4 +393,59 @@ describe('debtSimplifier (Tách biệt Cầu lông & Ăn nhậu)', () => {
     });
     expect(skewedRes.imbalanceAmount).toBe(50000);
   });
+
+  it('2 buổi nhậu độc lập (21/11 Chung trả & 23/11 Thảo trả) giữ đúng chủ nợ từng bữa, không ghép chéo', () => {
+    const chung = makeMember('MEM_CHUNG', 'Chung', 'MAIN');
+    const binh = makeMember('MEM_BINH', 'Bình', 'MAIN');
+    const minh = makeMember('MEM_MINH', 'Minh', 'MAIN');
+    const ha = makeMember('MEM_HA', 'Hà', 'MAIN');
+    const nam = makeMember('MEM_NAM', 'Nam', 'MAIN');
+    const lan = makeMember('MEM_LAN', 'Lan', 'MAIN');
+    const duc = makeMember('MEM_DUC', 'Đức', 'MAIN');
+    const allMembers = [thao, chung, binh, minh, ha, nam, lan, duc];
+
+    const ses21 = makeSession('SES_21', '2026-11-21', 'DRINKING', 'Nhậu nhà anh Chung', 'MEM_CHUNG');
+    const ses23 = makeSession('SES_23', '2026-11-23', 'DRINKING', 'Phương câu em', 'MEM_001');
+
+    // 21/11: Chung trả 1.000.000đ cho 4 người (250k/người): Chung nhận 750k, Bình/Minh/Hà mỗi người trả 250k
+    const atts21: Attendance[] = [
+      makeDrinkingAttendance('A21_C', 'SES_21', '2026-11-21', 'MEM_CHUNG', 250000, 1000000, 'MEM_CHUNG', false),
+      makeDrinkingAttendance('A21_B', 'SES_21', '2026-11-21', 'MEM_BINH', 250000, 0, 'MEM_CHUNG', false),
+      makeDrinkingAttendance('A21_M', 'SES_21', '2026-11-21', 'MEM_MINH', 250000, 0, 'MEM_CHUNG', false),
+      makeDrinkingAttendance('A21_H', 'SES_21', '2026-11-21', 'MEM_HA', 250000, 0, 'MEM_CHUNG', false),
+    ];
+
+    // 23/11: Thảo trả bill, 6 người nợ 159k (Bình, Nam, Lan, Đức, Tuấn, Hùng) -> Thảo nhận 954k
+    const atts23: Attendance[] = [
+      makeDrinkingAttendance('A23_T', 'SES_23', '2026-11-23', 'MEM_001', 159000, 1113000, 'MEM_001', false),
+      makeDrinkingAttendance('A23_B', 'SES_23', '2026-11-23', 'MEM_BINH', 159000, 0, 'MEM_001', false),
+      makeDrinkingAttendance('A23_N', 'SES_23', '2026-11-23', 'MEM_NAM', 159000, 0, 'MEM_001', false),
+      makeDrinkingAttendance('A23_L', 'SES_23', '2026-11-23', 'MEM_LAN', 159000, 0, 'MEM_001', false),
+      makeDrinkingAttendance('A23_D', 'SES_23', '2026-11-23', 'MEM_DUC', 159000, 0, 'MEM_001', false),
+      makeDrinkingAttendance('A23_TU', 'SES_23', '2026-11-23', 'MEM_002', 159000, 0, 'MEM_001', false),
+      makeDrinkingAttendance('A23_HU', 'SES_23', '2026-11-23', 'MEM_003', 159000, 0, 'MEM_001', false),
+    ];
+
+    const res = simplifyDebts({
+      attendances: [...atts21, ...atts23],
+      sessions: [ses21, ses23],
+      members: [...allMembers, tuan, hung],
+    });
+
+    // Phải ra đúng 9 lệnh chuyển (3 lệnh 250k về Chung + 6 lệnh 159k về Thảo), không bị tách 45k/114k
+    expect(res.transfers).toHaveLength(9);
+    expect(res.totalOutstanding).toBe(750000 + 954000);
+
+    const toChung = res.transfers.filter((t) => t.toMember.member_id === 'MEM_CHUNG');
+    const toThao = res.transfers.filter((t) => t.toMember.member_id === 'MEM_001');
+    expect(toChung).toHaveLength(3);
+    expect(toChung.every((t) => t.amount === 250000)).toBe(true);
+    expect(toChung.every((t) => t.breakdownSessions.length === 1 && t.breakdownSessions[0].sessionId === 'SES_21')).toBe(true);
+    expect(toChung[0].breakdownSessions[0].payerName).toBe('Chung');
+
+    expect(toThao).toHaveLength(6);
+    expect(toThao.every((t) => t.amount === 159000)).toBe(true);
+    expect(toThao.every((t) => t.breakdownSessions.length === 1 && t.breakdownSessions[0].sessionId === 'SES_23')).toBe(true);
+    expect(toThao[0].breakdownSessions[0].payerName).toBe('Thảo');
+  });
 });

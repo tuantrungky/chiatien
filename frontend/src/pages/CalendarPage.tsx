@@ -616,7 +616,12 @@ export function CalendarPage({
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-slate-500">{s.attendee_count} người tham gia</p>
+                      <p className="text-[11px] text-slate-500">
+                        {s.attendee_count} người tham gia
+                        {s.type === 'DRINKING' && (s.payer_name || s.payer_id)
+                          ? ` • Người ứng tiền: ${s.payer_name || s.payer_id}`
+                          : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

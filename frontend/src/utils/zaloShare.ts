@@ -136,8 +136,12 @@ export function buildDebtsZaloMessage(params: {
       const oldestDate = tr.breakdownSessions[0]?.sessionDate || '';
       const ov = oldestDate ? getOverdueInfo(oldestDate, todayStr) : { severity: 'NONE' as const, emoji: '', label: '' };
       const ovTag = ov.severity !== 'NONE' ? ` ${ov.emoji} [${ov.label}]` : '';
+      const sessionSummary =
+        tr.breakdownSessions.length === 1
+          ? `${formatShortDateVN(tr.breakdownSessions[0].sessionDate)} - ${tr.breakdownSessions[0].sessionTitle}`
+          : `${tr.breakdownSessions.length} buổi`;
       lines.push(
-        `- ${tr.fromMember.name} -> ${tr.toMember.name}: ${formatVND(tr.amount)} (${tr.breakdownSessions.length} buổi)${ovTag}`
+        `- ${tr.fromMember.name} -> ${tr.toMember.name}: ${formatVND(tr.amount)} (${sessionSummary})${ovTag}`
       );
     }
   }

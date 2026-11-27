@@ -1050,12 +1050,22 @@ export function DashboardPage({
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
+                          <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500 flex-wrap">
                             <span className="font-extrabold text-rose-600 text-sm">
                               {formatVND(tr.amount)}
                             </span>
                             <span>•</span>
-                            <span>{tr.breakdownSessions.length} buổi nhậu</span>
+                            {tr.breakdownSessions.length === 1 ? (
+                              <span>
+                                {formatShortDateVN(tr.breakdownSessions[0].sessionDate)} •{' '}
+                                {tr.breakdownSessions[0].sessionTitle}
+                                {tr.breakdownSessions[0].payerName
+                                  ? ` • Người ứng tiền: ${tr.breakdownSessions[0].payerName}`
+                                  : ''}
+                              </span>
+                            ) : (
+                              <span>{tr.breakdownSessions.length} buổi nhậu</span>
+                            )}
                           </div>
                         </div>
 
@@ -1274,6 +1284,11 @@ export function DashboardPage({
                     <span className="text-xs text-slate-400">{formatDateVN(s.date)}</span>
                   </div>
                   <p className="text-sm font-semibold text-slate-900 truncate mt-1">{s.title}</p>
+                  {s.type === 'DRINKING' && (s.payer_name || s.payer_id) && (
+                    <p className="text-[11px] font-medium text-orange-700 mt-0.5 truncate">
+                      Người ứng tiền: {s.payer_name || s.payer_id}
+                    </p>
+                  )}
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-sm font-bold text-slate-900">{formatVND(s.total_amount)}</p>

@@ -72,10 +72,69 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
 
   const netMap = new Map<string, number>();
   const breakdownByDebtor = new Map<string, DebtBreakdownSession[]>();
+  const breakdownByEdge = new Map<string, DebtBreakdownSession[]>();
+  const edgeMap = new Map<string, Map<string, number>>();
+  const drinkingAttsBySession = new Map<string, Attendance[]>();
 
   const addBalance = (memberId: string, delta: number) => {
     if (!memberId) return;
     netMap.set(memberId, (netMap.get(memberId) || 0) + delta);
+  };
+
+  const getEdge = (fromId: string, toId: string): number =>
+    edgeMap.get(fromId)?.get(toId) || 0;
+
+  const setEdge = (fromId: string, toId: string, val: number) => {
+    const rounded = Math.round(val);
+    if (rounded <= 0) {
+      const m = edgeMap.get(fromId);
+      if (m) {
+        m.delete(toId);
+        if (m.size === 0) edgeMap.delete(fromId);
+      }
+      breakdownByEdge.delete(`${fromId}|${toId}`);
+      return;
+    }
+    if (!edgeMap.has(fromId)) edgeMap.set(fromId, new Map());
+    edgeMap.get(fromId)!.set(toId, rounded);
+  };
+
+  const addEdge = (fromId: string, toId: string, delta: number) => {
+    if (!fromId || !toId || fromId === toId || delta <= 0) return;
+    setEdge(fromId, toId, getEdge(fromId, toId) + delta);
+  };
+
+  const addEdgeBreakdown = (fromId: string, toId: string, item: DebtBreakdownSession) => {
+    const key = `${fromId}|${toId}`;
+    const list = breakdownByEdge.get(key) || [];
+    if (!list.some((x) => x.attendanceId === item.attendanceId && x.sessionId === item.sessionId)) {
+      list.push(item);
+      breakdownByEdge.set(key, list);
+    }
+  };
+
+  const mergeEdgeBreakdown = (srcFrom: string, srcTo: string, dstFrom: string, dstTo: string) => {
+    const items = breakdownByEdge.get(`${srcFrom}|${srcTo}`);
+    if (!items) return;
+    for (const item of items) addEdgeBreakdown(dstFrom, dstTo, item);
+  };
+
+  const cancelOpposites = () => {
+    const pairs: Array<[string, string]> = [];
+    for (const [u, targets] of edgeMap.entries()) {
+      for (const v of targets.keys()) {
+        if (u < v && getEdge(v, u) > 0) pairs.push([u, v]);
+      }
+    }
+    for (const [u, v] of pairs) {
+      const wUV = getEdge(u, v);
+      const wVU = getEdge(v, u);
+      const m = Math.min(wUV, wVU);
+      if (m > 0) {
+        setEdge(u, v, wUV - m);
+        setEdge(v, u, wVU - m);
+      }
+    }
   };
 
   // Nhóm các dòng Attendance DRINKING chưa thanh toán theo buổi
@@ -88,6 +147,11 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
     const session = sessionsMap.get(att.session_id);
     const mId = String(att.member_id || '').trim();
     if (!mId) continue;
+
+    if (!drinkingAttsBySession.has(att.session_id)) {
+      drinkingAttsBySession.set(att.session_id, []);
+    }
+    drinkingAttsBySession.get(att.session_id)!.push(att);
 
     const rawNet = Math.round(Number(att.net_amount) || 0);
     if (rawNet !== 0) {
@@ -106,6 +170,10 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
           amount: rawNet,
           contributedAmount: Math.round(Number(att.contributed_amount) || 0),
           perPersonAmount: Math.round(Number(att.fee_amount) || 0),
+          payerName:
+            membersMap.get(String(session?.payer_id || '').trim())?.name ||
+            session?.payer_name ||
+            undefined,
         });
       }
       continue;
@@ -128,11 +196,122 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
         amount: fee,
         contributedAmount: 0,
         perPersonAmount: fee,
+        payerName: membersMap.get(creditorId)?.name || session?.payer_name || undefined,
       });
     }
   }
 
-  // Cấn trừ các giao dịch DRINKING đã chuyển trước một phần (is_reconciled === false)
+  // Bước 1: Ghép trực tiếp con nợ -> chủ nợ TRONG CÙNG TỪNG BUỔI NHẬU
+  const residualDebtors: Array<{ att: Attendance; mId: string; session?: Session; remaining: number }> = [];
+  const residualCreditors: Array<{ mId: string; session?: Session; remaining: number }> = [];
+
+  for (const [sessionId, sessAtts] of drinkingAttsBySession.entries()) {
+    const session = sessionsMap.get(sessionId);
+    const sDebtors: Array<{ att: Attendance; mId: string; remaining: number; rawNet: number }> = [];
+    const sCreditors: Array<{ mId: string; remaining: number }> = [];
+
+    for (const att of sessAtts) {
+      const mId = String(att.member_id || '').trim();
+      if (!mId) continue;
+      const rawNet = Math.round(Number(att.net_amount) || 0);
+      if (rawNet > 0) {
+        sDebtors.push({ att, mId, remaining: rawNet, rawNet });
+      } else if (rawNet < 0) {
+        sCreditors.push({ mId, remaining: -rawNet });
+      } else {
+        const fee = Math.round(Number(att.fee_amount) || 0);
+        const creditorId = String(att.creditor_id || session?.payer_id || '').trim();
+        if (fee > 0 && creditorId && creditorId !== mId) {
+          addEdge(mId, creditorId, fee);
+          addEdgeBreakdown(mId, creditorId, {
+            attendanceId: att.attendance_id,
+            sessionId,
+            sessionDate: att.session_date || session?.date || '',
+            sessionTitle: session?.title || 'Ăn nhậu',
+            sessionType: 'DRINKING',
+            amount: fee,
+            contributedAmount: 0,
+            perPersonAmount: fee,
+            payerName: membersMap.get(creditorId)?.name || session?.payer_name || creditorId,
+          });
+        }
+      }
+    }
+
+    sDebtors.sort((a, b) => (b.remaining !== a.remaining ? b.remaining - a.remaining : a.mId.localeCompare(b.mId)));
+    sCreditors.sort((a, b) => (b.remaining !== a.remaining ? b.remaining - a.remaining : a.mId.localeCompare(b.mId)));
+
+    let di = 0;
+    let ci = 0;
+    while (di < sDebtors.length && ci < sCreditors.length) {
+      const d = sDebtors[di];
+      const c = sCreditors[ci];
+      const matchAmt = Math.min(d.remaining, c.remaining);
+      if (matchAmt > 0) {
+        addEdge(d.mId, c.mId, matchAmt);
+        const payerName =
+          membersMap.get(c.mId)?.name ||
+          session?.payer_name ||
+          membersMap.get(String(session?.payer_id || '').trim())?.name ||
+          c.mId;
+        addEdgeBreakdown(d.mId, c.mId, {
+          attendanceId: d.att.attendance_id,
+          sessionId,
+          sessionDate: d.att.session_date || session?.date || '',
+          sessionTitle: session?.title || 'Ăn nhậu',
+          sessionType: 'DRINKING',
+          amount: d.rawNet,
+          contributedAmount: Math.round(Number(d.att.contributed_amount) || 0),
+          perPersonAmount: Math.round(Number(d.att.fee_amount) || 0),
+          payerName,
+        });
+        d.remaining -= matchAmt;
+        c.remaining -= matchAmt;
+      }
+      if (d.remaining === 0) di++;
+      if (c.remaining === 0) ci++;
+    }
+
+    for (const d of sDebtors) {
+      if (d.remaining > 0) residualDebtors.push({ att: d.att, mId: d.mId, session, remaining: d.remaining });
+    }
+    for (const c of sCreditors) {
+      if (c.remaining > 0) residualCreditors.push({ mId: c.mId, session, remaining: c.remaining });
+    }
+  }
+
+  // Ghép phần dư (nếu có buổi bị lệch sổ do gạch nợ từng phần / làm tròn)
+  if (residualDebtors.length > 0 && residualCreditors.length > 0) {
+    residualDebtors.sort((a, b) => (b.remaining !== a.remaining ? b.remaining - a.remaining : a.mId.localeCompare(b.mId)));
+    residualCreditors.sort((a, b) => (b.remaining !== a.remaining ? b.remaining - a.remaining : a.mId.localeCompare(b.mId)));
+    let rdi = 0;
+    let rci = 0;
+    while (rdi < residualDebtors.length && rci < residualCreditors.length) {
+      const rd = residualDebtors[rdi];
+      const rc = residualCreditors[rci];
+      const mAmt = Math.min(rd.remaining, rc.remaining);
+      if (mAmt > 0) {
+        addEdge(rd.mId, rc.mId, mAmt);
+        addEdgeBreakdown(rd.mId, rc.mId, {
+          attendanceId: rd.att.attendance_id,
+          sessionId: rd.att.session_id,
+          sessionDate: rd.att.session_date || rd.session?.date || '',
+          sessionTitle: rd.session?.title || 'Ăn nhậu',
+          sessionType: 'DRINKING',
+          amount: Math.round(Number(rd.att.net_amount) || 0),
+          contributedAmount: Math.round(Number(rd.att.contributed_amount) || 0),
+          perPersonAmount: Math.round(Number(rd.att.fee_amount) || 0),
+          payerName: membersMap.get(rc.mId)?.name || rd.session?.payer_name || rc.mId,
+        });
+        rd.remaining -= mAmt;
+        rc.remaining -= mAmt;
+      }
+      if (rd.remaining === 0) rdi++;
+      if (rc.remaining === 0) rci++;
+    }
+  }
+
+  // Bước 2: Cấn trừ các giao dịch DRINKING đã chuyển trước một phần (is_reconciled === false)
   for (const st of unreconciledSettlements) {
     if (st.is_reconciled) continue;
     if (st.category && st.category !== 'DRINKING') continue;
@@ -143,11 +322,75 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
 
     addBalance(fromId, amount);
     addBalance(toId, -amount);
+
+    const existingForward = getEdge(fromId, toId);
+    if (existingForward >= amount) {
+      setEdge(fromId, toId, existingForward - amount);
+    } else {
+      if (existingForward > 0) setEdge(fromId, toId, 0);
+      addEdge(toId, fromId, amount - existingForward);
+    }
+  }
+
+  cancelOpposites();
+
+  // Bước 3: Rút gọn dây chuyền bắc cầu A -> B -> C CHỈ khi B vừa nợ vừa được nhận (in > 0 && out > 0)
+  for (let iter = 0; iter < 500; iter++) {
+    const outNodes = Array.from(edgeMap.keys()).sort();
+    let reduced = false;
+
+    for (const bNode of outNodes) {
+      const outEdges = edgeMap.get(bNode);
+      if (!outEdges || outEdges.size === 0) continue;
+
+      const incomingFromA: Array<{ aNode: string; amount: number }> = [];
+      for (const [u, targets] of edgeMap.entries()) {
+        const w = targets.get(bNode) || 0;
+        if (u !== bNode && w > 0) incomingFromA.push({ aNode: u, amount: w });
+      }
+      if (incomingFromA.length === 0) continue;
+
+      const outgoingToC = Array.from(outEdges.entries())
+        .map(([cNode, amount]) => ({ cNode, amount }))
+        .filter((x) => x.cNode !== bNode && x.amount > 0);
+      if (outgoingToC.length === 0) continue;
+
+      incomingFromA.sort((x, y) => (y.amount !== x.amount ? y.amount - x.amount : x.aNode.localeCompare(y.aNode)));
+      outgoingToC.sort((x, y) => (y.amount !== x.amount ? y.amount - x.amount : x.cNode.localeCompare(y.cNode)));
+
+      // Ưu tiên ghép cặp (A, C) đã có cạnh hoặc bằng số tiền
+      let chosenA = incomingFromA[0];
+      let chosenC = outgoingToC[0];
+      let foundPreferred = false;
+      for (const inc of incomingFromA) {
+        for (const out of outgoingToC) {
+          if (inc.aNode === out.cNode || getEdge(inc.aNode, out.cNode) > 0 || inc.amount === out.amount) {
+            chosenA = inc;
+            chosenC = out;
+            foundPreferred = true;
+            break;
+          }
+        }
+        if (foundPreferred) break;
+      }
+
+      const m = Math.min(chosenA.amount, chosenC.amount);
+      setEdge(chosenA.aNode, bNode, chosenA.amount - m);
+      setEdge(bNode, chosenC.cNode, chosenC.amount - m);
+      if (chosenA.aNode !== chosenC.cNode) {
+        addEdge(chosenA.aNode, chosenC.cNode, m);
+        mergeEdgeBreakdown(chosenA.aNode, bNode, chosenA.aNode, chosenC.cNode);
+        mergeEdgeBreakdown(bNode, chosenC.cNode, chosenA.aNode, chosenC.cNode);
+      }
+      cancelOpposites();
+      reduced = true;
+      break;
+    }
+
+    if (!reduced) break;
   }
 
   const netBalances: NetBalanceItem[] = [];
-  const debtors: Array<{ memberId: string; amount: number }> = [];
-  const creditors: Array<{ memberId: string; amount: number }> = [];
   let totalDebtors = 0;
   let totalCreditors = 0;
 
@@ -159,63 +402,60 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
     netBalances.push({ memberId, name: member.name, balance });
 
     if (balance < 0) {
-      debtors.push({ memberId, amount: -balance });
       totalDebtors += -balance;
     } else {
-      creditors.push({ memberId, amount: balance });
       totalCreditors += balance;
     }
   }
 
   const imbalanceAmount = totalCreditors - totalDebtors;
-
-  debtors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
-  creditors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
   netBalances.sort((a, b) => a.balance - b.balance);
 
+  const rawEdges: Array<{ fromId: string; toId: string; amount: number }> = [];
+  for (const [fromId, targets] of edgeMap.entries()) {
+    for (const [toId, amount] of targets.entries()) {
+      if (amount > 0) rawEdges.push({ fromId, toId, amount });
+    }
+  }
+  rawEdges.sort((a, b) =>
+    b.amount !== a.amount
+      ? b.amount - a.amount
+      : a.fromId !== b.fromId
+      ? a.fromId.localeCompare(b.fromId)
+      : a.toId.localeCompare(b.toId)
+  );
+
   const transfers: SimplifiedTransferDetail[] = [];
-  let i = 0;
-  let j = 0;
   let totalOutstanding = 0;
 
-  while (i < debtors.length && j < creditors.length) {
-    const debtor = debtors[i];
-    const creditor = creditors[j];
-    const transferAmount = Math.min(debtor.amount, creditor.amount);
+  for (const edge of rawEdges) {
+    const fromMember = membersMap.get(edge.fromId) || createPlaceholderMember(edge.fromId);
+    const toMember = membersMap.get(edge.toId) || createPlaceholderMember(edge.toId);
+    const transferContent = buildTransferContent(transferPrefix, fromMember.name, toMember.name);
+    const vietQrUrl = buildVietQrUrl({
+      bankBin: toMember.bank_bin,
+      accountNo: toMember.account_no,
+      accountName: toMember.account_name || toMember.name,
+      amount: edge.amount,
+      addInfo: transferContent,
+      template: vietqrTemplate,
+    });
 
-    if (transferAmount > 0) {
-      const fromMember = membersMap.get(debtor.memberId) || createPlaceholderMember(debtor.memberId);
-      const toMember = membersMap.get(creditor.memberId) || createPlaceholderMember(creditor.memberId);
-      const transferContent = buildTransferContent(transferPrefix, fromMember.name, toMember.name);
-      const vietQrUrl = buildVietQrUrl({
-        bankBin: toMember.bank_bin,
-        accountNo: toMember.account_no,
-        accountName: toMember.account_name || toMember.name,
-        amount: transferAmount,
-        addInfo: transferContent,
-        template: vietqrTemplate,
-      });
+    const edgeBreakdowns = breakdownByEdge.get(`${edge.fromId}|${edge.toId}`);
+    const fallbackBreakdowns = breakdownByDebtor.get(edge.fromId) || [];
+    const breakdownSessions = [...(edgeBreakdowns && edgeBreakdowns.length > 0 ? edgeBreakdowns : fallbackBreakdowns)].sort(
+      (a, b) => a.sessionDate.localeCompare(b.sessionDate)
+    );
 
-      const rawBreakdowns = breakdownByDebtor.get(debtor.memberId) || [];
-      const breakdownSessions = [...rawBreakdowns].sort((a, b) =>
-        a.sessionDate.localeCompare(b.sessionDate)
-      );
-
-      transfers.push({
-        fromMember,
-        toMember,
-        amount: transferAmount,
-        transferContent,
-        vietQrUrl,
-        breakdownSessions,
-      });
-      totalOutstanding += transferAmount;
-    }
-
-    debtor.amount -= transferAmount;
-    creditor.amount -= transferAmount;
-    if (debtor.amount === 0) i++;
-    if (creditor.amount === 0) j++;
+    transfers.push({
+      fromMember,
+      toMember,
+      amount: edge.amount,
+      transferContent,
+      vietQrUrl,
+      breakdownSessions,
+    });
+    totalOutstanding += edge.amount;
   }
 
   const transferCountByDebtor = new Map<string, number>();

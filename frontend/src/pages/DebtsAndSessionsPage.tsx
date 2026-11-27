@@ -995,6 +995,9 @@ export function DebtsAndSessionsPage({
                   const oldestDate = tr.breakdownSessions.map((b) => b.sessionDate).sort()[0];
                   const ov = oldestDate ? getOverdueInfo(oldestDate, todayStr) : null;
                   const isMine = myMemberId === tr.fromMember.member_id;
+                  const uniquePayers = Array.from(
+                    new Set(tr.breakdownSessions.map((b) => b.payerName).filter(Boolean))
+                  );
                   return (
                     <div
                       key={key}
@@ -1022,6 +1025,30 @@ export function DebtsAndSessionsPage({
                               </span>
                             )}
                           </div>
+                          {tr.breakdownSessions.length === 1 ? (
+                            <p className="text-xs text-slate-600 mt-0.5">
+                              Bữa {formatShortDateVN(tr.breakdownSessions[0].sessionDate)} •{' '}
+                              <span className="font-medium">{tr.breakdownSessions[0].sessionTitle}</span>
+                              {tr.breakdownSessions[0].payerName && (
+                                <span className="text-orange-700 font-semibold">
+                                  {' '}
+                                  • Người ứng tiền: {tr.breakdownSessions[0].payerName}
+                                </span>
+                              )}
+                            </p>
+                          ) : (
+                            tr.breakdownSessions.length > 1 && (
+                              <p className="text-xs text-slate-600 mt-0.5">
+                                {tr.breakdownSessions.length} buổi nhậu
+                                {uniquePayers.length > 0 && (
+                                  <span className="text-orange-700 font-semibold">
+                                    {' '}
+                                    • Người ứng tiền: {uniquePayers.join(', ')}
+                                  </span>
+                                )}
+                              </p>
+                            )
+                          )}
                           <p className="text-xs text-slate-500 mt-0.5 truncate">
                             Nội dung CK: <span className="font-mono">{tr.transferContent}</span>
                           </p>
@@ -1100,6 +1127,7 @@ export function DebtsAndSessionsPage({
                                 <p className="text-[11px] text-slate-400">
                                   Phần chia: {formatVND(b.perPersonAmount)} • Đã góp:{' '}
                                   {formatVND(b.contributedAmount)}
+                                  {b.payerName && ` • Người ứng tiền: ${b.payerName}`}
                                 </p>
                               </div>
                               <span className="font-bold text-rose-600 shrink-0">
@@ -1224,7 +1252,7 @@ export function DebtsAndSessionsPage({
                 type="search"
                 value={sessionSearch}
                 onChange={(e) => setSessionSearch(e.target.value)}
-                placeholder="Tìm tên buổi, ghi chú, người trả..."
+                placeholder="Tìm tên buổi, ghi chú, người ứng tiền..."
                 className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
               />
               {sessionSearch && (
@@ -1266,12 +1294,12 @@ export function DebtsAndSessionsPage({
               <div className="relative">
                 <UserCheck className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
-                  aria-label="Lọc theo người trả tiền"
+                  aria-label="Lọc theo người ứng tiền"
                   value={sessionPayerId}
                   onChange={(e) => setSessionPayerId(e.target.value)}
                   className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
                 >
-                  <option value="">Tất cả người trả tiền</option>
+                  <option value="">Tất cả người ứng tiền</option>
                   {sessionPayerOptions.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name} ({p.count} buổi)
@@ -1401,6 +1429,12 @@ export function DebtsAndSessionsPage({
                               </span>
                             </div>
                             <h3 className="text-sm font-bold text-slate-900 mt-1">{s.title}</h3>
+                            {!isBadminton && (s.payer_name || s.payer_id) && (
+                              <p className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 mt-0.5">
+                                <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                                <span>Người ứng tiền: {s.payer_name || s.payer_id}</span>
+                              </p>
+                            )}
                             {s.receipt_summary && (
                               <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">
                                 {s.receipt_summary}
@@ -1538,24 +1572,33 @@ export function DebtsAndSessionsPage({
                           <p className="text-xs text-slate-500">Đang tải chi tiết...</p>
                         ) : detail ? (
                           <>
-                            {!isBadminton && detail.items.length > 0 && (
-                              <div className="bg-white rounded-xl p-3 border border-slate-200/80 text-xs space-y-1">
-                                <p className="font-bold text-slate-700">Các khoản góp món / hóa đơn:</p>
-                                {detail.items.map((it) => (
-                                  <div
-                                    key={it.item_id}
-                                    className="flex items-center justify-between text-slate-600"
-                                  >
-                                    <span>
-                                      • <span className="font-semibold">{it.member_name}</span>:{' '}
-                                      {it.item_name}
-                                    </span>
-                                    <span className="font-bold text-slate-900">
-                                      {formatVND(it.amount)}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
+                            {!isBadminton && (
+                              detail.items.length > 0 ? (
+                                <div className="bg-white rounded-xl p-3 border border-slate-200/80 text-xs space-y-1">
+                                  <p className="font-bold text-slate-700">Người ứng tiền &amp; góp món:</p>
+                                  {detail.items.map((it) => (
+                                    <div
+                                      key={it.item_id}
+                                      className="flex items-center justify-between text-slate-600"
+                                    >
+                                      <span>
+                                        • <span className="font-semibold text-orange-700">{it.member_name}</span>:{' '}
+                                        {it.item_name}
+                                      </span>
+                                      <span className="font-bold text-slate-900">
+                                        {formatVND(it.amount)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (s.payer_name || s.payer_id) ? (
+                                <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 text-xs text-slate-700">
+                                  Người ứng tiền bữa nhậu:{' '}
+                                  <span className="font-bold text-orange-700">
+                                    {s.payer_name || s.payer_id}
+                                  </span>
+                                </div>
+                              ) : null
                             )}
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

@@ -1170,8 +1170,49 @@ function computeDebtsData() {
   var totalAdhocUnpaid = 0;
   var drinkingUnpaidAttendances = [];
   var drinkingNetMap = {};
+  var drinkingAttsBySession = {};
+  var edgeMap = {};
   var ensureDrinker = function (id) {
     if (id && drinkingNetMap[id] === undefined) drinkingNetMap[id] = 0;
+  };
+  var getEdge = function (fromId, toId) {
+    return (edgeMap[fromId] && edgeMap[fromId][toId]) ? edgeMap[fromId][toId] : 0;
+  };
+  var setEdge = function (fromId, toId, val) {
+    var rounded = Math.round(val);
+    if (rounded <= 0) {
+      if (edgeMap[fromId]) {
+        delete edgeMap[fromId][toId];
+        if (Object.keys(edgeMap[fromId]).length === 0) delete edgeMap[fromId];
+      }
+      return;
+    }
+    if (!edgeMap[fromId]) edgeMap[fromId] = {};
+    edgeMap[fromId][toId] = rounded;
+  };
+  var addEdge = function (fromId, toId, delta) {
+    if (!fromId || !toId || fromId === toId || delta <= 0) return;
+    setEdge(fromId, toId, getEdge(fromId, toId) + delta);
+  };
+  var cancelOpposites = function () {
+    var fromIds = Object.keys(edgeMap);
+    for (var fi = 0; fi < fromIds.length; fi++) {
+      var u = fromIds[fi];
+      if (!edgeMap[u]) continue;
+      var toIds = Object.keys(edgeMap[u]);
+      for (var ti = 0; ti < toIds.length; ti++) {
+        var v = toIds[ti];
+        if (u < v && getEdge(v, u) > 0) {
+          var wUV = getEdge(u, v);
+          var wVU = getEdge(v, u);
+          var m = Math.min(wUV, wVU);
+          if (m > 0) {
+            setEdge(u, v, wUV - m);
+            setEdge(v, u, wVU - m);
+          }
+        }
+      }
+    }
   };
 
   for (var ai = 0; ai < attRows.length; ai++) {
@@ -1245,10 +1286,19 @@ function computeDebtsData() {
     }
 
     if (sType === 'DRINKING') {
+      var dSid = String(a.session_id || '').trim();
       var rawNet = toInt_(a.net_amount, 0);
       var feeAmt = toInt_(a.fee_amount, 0);
       var contribAmt = toInt_(a.contributed_amount, 0);
       var cId = String(a.creditor_id || '').trim();
+
+      if (!drinkingAttsBySession[dSid]) drinkingAttsBySession[dSid] = [];
+      drinkingAttsBySession[dSid].push({
+        memberId: mId,
+        rawNet: rawNet,
+        feeAmt: feeAmt,
+        creditorId: cId
+      });
 
       if (rawNet !== 0) {
         ensureDrinker(mId);
@@ -1264,7 +1314,7 @@ function computeDebtsData() {
 
       drinkingUnpaidAttendances.push({
         attendance_id: String(a.attendance_id || '').trim(),
-        session_id: String(a.session_id || '').trim(),
+        session_id: dSid,
         session_date: String(a.session_date || '').trim(),
         session_type: 'DRINKING',
         member_id: mId,
@@ -1280,6 +1330,77 @@ function computeDebtsData() {
         settlement_id: '',
         note: String(a.note || '').trim()
       });
+    }
+  }
+
+  // Bước 1: Ghép trực tiếp con nợ -> chủ nợ TRONG CÙNG TỪNG BUỔI NHẬU
+  var residualDebtors = [];
+  var residualCreditors = [];
+  var dSessKeys = Object.keys(drinkingAttsBySession);
+  for (var sk = 0; sk < dSessKeys.length; sk++) {
+    var dSidKey = dSessKeys[sk];
+    var sessAttList = drinkingAttsBySession[dSidKey];
+    var sessRef = sessionsMap[dSidKey];
+    var sDebtors = [];
+    var sCreditors = [];
+
+    for (var sai = 0; sai < sessAttList.length; sai++) {
+      var sItem = sessAttList[sai];
+      if (!sItem.memberId) continue;
+      if (sItem.rawNet > 0) {
+        sDebtors.push({ mId: sItem.memberId, remaining: sItem.rawNet });
+      } else if (sItem.rawNet < 0) {
+        sCreditors.push({ mId: sItem.memberId, remaining: -sItem.rawNet });
+      } else {
+        var legCredId = sItem.creditorId || (sessRef ? String(sessRef.payer_id || '').trim() : '');
+        if (sItem.feeAmt > 0 && legCredId && legCredId !== sItem.memberId) {
+          addEdge(sItem.memberId, legCredId, sItem.feeAmt);
+        }
+      }
+    }
+
+    sDebtors.sort(function (x, y) { return y.remaining !== x.remaining ? y.remaining - x.remaining : x.mId.localeCompare(y.mId); });
+    sCreditors.sort(function (x, y) { return y.remaining !== x.remaining ? y.remaining - x.remaining : x.mId.localeCompare(y.mId); });
+
+    var sDi = 0;
+    var sCi = 0;
+    while (sDi < sDebtors.length && sCi < sCreditors.length) {
+      var sd = sDebtors[sDi];
+      var sc = sCreditors[sCi];
+      var matchAmt = Math.min(sd.remaining, sc.remaining);
+      if (matchAmt > 0) {
+        addEdge(sd.mId, sc.mId, matchAmt);
+        sd.remaining -= matchAmt;
+        sc.remaining -= matchAmt;
+      }
+      if (sd.remaining === 0) sDi++;
+      if (sc.remaining === 0) sCi++;
+    }
+
+    for (var rdi = 0; rdi < sDebtors.length; rdi++) {
+      if (sDebtors[rdi].remaining > 0) residualDebtors.push(sDebtors[rdi]);
+    }
+    for (var rci = 0; rci < sCreditors.length; rci++) {
+      if (sCreditors[rci].remaining > 0) residualCreditors.push(sCreditors[rci]);
+    }
+  }
+
+  if (residualDebtors.length > 0 && residualCreditors.length > 0) {
+    residualDebtors.sort(function (x, y) { return y.remaining !== x.remaining ? y.remaining - x.remaining : x.mId.localeCompare(y.mId); });
+    residualCreditors.sort(function (x, y) { return y.remaining !== x.remaining ? y.remaining - x.remaining : x.mId.localeCompare(y.mId); });
+    var resDi = 0;
+    var resCi = 0;
+    while (resDi < residualDebtors.length && resCi < residualCreditors.length) {
+      var rdItem = residualDebtors[resDi];
+      var rcItem = residualCreditors[resCi];
+      var resAmt = Math.min(rdItem.remaining, rcItem.remaining);
+      if (resAmt > 0) {
+        addEdge(rdItem.mId, rcItem.mId, resAmt);
+        rdItem.remaining -= resAmt;
+        rcItem.remaining -= resAmt;
+      }
+      if (rdItem.remaining === 0) resDi++;
+      if (rcItem.remaining === 0) resCi++;
     }
   }
 
@@ -1319,11 +1440,19 @@ function computeDebtsData() {
       continue;
     }
 
-    if (!isRec && fromId && toId && sAmt > 0) {
+    if (!isRec && fromId && toId && fromId !== toId && sAmt > 0) {
       ensureDrinker(fromId);
       ensureDrinker(toId);
       drinkingNetMap[fromId] += sAmt;
       drinkingNetMap[toId] -= sAmt;
+
+      var existingForward = getEdge(fromId, toId);
+      if (existingForward >= sAmt) {
+        setEdge(fromId, toId, existingForward - sAmt);
+      } else {
+        if (existingForward > 0) setEdge(fromId, toId, 0);
+        addEdge(toId, fromId, sAmt - existingForward);
+      }
     }
     if (!isRec) {
       unreconciledDrinkingSettlements.push(stObj);
@@ -1337,9 +1466,69 @@ function computeDebtsData() {
     return a.settled_at < b.settled_at ? 1 : -1;
   });
 
+  cancelOpposites();
+
+  // Bước 3: Rút gọn dây chuyền bắc cầu A -> B -> C CHỈ khi B vừa nợ vừa được nhận
+  for (var iter = 0; iter < 500; iter++) {
+    var outNodes = Object.keys(edgeMap).sort();
+    var reduced = false;
+    for (var oni = 0; oni < outNodes.length; oni++) {
+      var bNode = outNodes[oni];
+      var outTargets = edgeMap[bNode];
+      if (!outTargets) continue;
+
+      var incomingFromA = [];
+      for (var uKey in edgeMap) {
+        if (uKey !== bNode && edgeMap[uKey] && edgeMap[uKey][bNode] > 0) {
+          incomingFromA.push({ aNode: uKey, amount: edgeMap[uKey][bNode] });
+        }
+      }
+      if (incomingFromA.length === 0) continue;
+
+      var outgoingToC = [];
+      for (var cKey in outTargets) {
+        if (cKey !== bNode && outTargets[cKey] > 0) {
+          outgoingToC.push({ cNode: cKey, amount: outTargets[cKey] });
+        }
+      }
+      if (outgoingToC.length === 0) continue;
+
+      incomingFromA.sort(function (x, y) { return y.amount !== x.amount ? y.amount - x.amount : x.aNode.localeCompare(y.aNode); });
+      outgoingToC.sort(function (x, y) { return y.amount !== x.amount ? y.amount - x.amount : x.cNode.localeCompare(y.cNode); });
+
+      var chosenA = incomingFromA[0];
+      var chosenC = outgoingToC[0];
+      var foundPref = false;
+      for (var ia = 0; ia < incomingFromA.length; ia++) {
+        for (var ic = 0; ic < outgoingToC.length; ic++) {
+          if (
+            incomingFromA[ia].aNode === outgoingToC[ic].cNode ||
+            getEdge(incomingFromA[ia].aNode, outgoingToC[ic].cNode) > 0 ||
+            incomingFromA[ia].amount === outgoingToC[ic].amount
+          ) {
+            chosenA = incomingFromA[ia];
+            chosenC = outgoingToC[ic];
+            foundPref = true;
+            break;
+          }
+        }
+        if (foundPref) break;
+      }
+
+      var transM = Math.min(chosenA.amount, chosenC.amount);
+      setEdge(chosenA.aNode, bNode, chosenA.amount - transM);
+      setEdge(bNode, chosenC.cNode, chosenC.amount - transM);
+      if (chosenA.aNode !== chosenC.cNode) {
+        addEdge(chosenA.aNode, chosenC.cNode, transM);
+      }
+      cancelOpposites();
+      reduced = true;
+      break;
+    }
+    if (!reduced) break;
+  }
+
   var netBalances = [];
-  var debtors = [];
-  var creditors = [];
   var totalDebtorsAmt = 0;
   var totalCreditorsAmt = 0;
   var dIds = Object.keys(drinkingNetMap);
@@ -1350,58 +1539,58 @@ function computeDebtsData() {
     var name = membersMap[id] ? membersMap[id].name : id;
     netBalances.push({ memberId: id, name: name, balance: bal });
     if (bal < 0) {
-      debtors.push({ memberId: id, name: name, amount: -bal });
       totalDebtorsAmt += -bal;
     } else {
-      creditors.push({ memberId: id, name: name, amount: bal });
       totalCreditorsAmt += bal;
     }
   }
   var imbalanceAmount = totalCreditorsAmt - totalDebtorsAmt;
 
-  debtors.sort(function (a, b) { return b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId); });
-  creditors.sort(function (a, b) { return b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId); });
+  var rawEdges = [];
+  for (var efKey in edgeMap) {
+    for (var etKey in edgeMap[efKey]) {
+      var eAmt = edgeMap[efKey][etKey];
+      if (eAmt > 0) {
+        rawEdges.push({ fromId: efKey, toId: etKey, amount: eAmt });
+      }
+    }
+  }
+  rawEdges.sort(function (x, y) {
+    if (y.amount !== x.amount) return y.amount - x.amount;
+    if (x.fromId !== y.fromId) return x.fromId.localeCompare(y.fromId);
+    return x.toId.localeCompare(y.toId);
+  });
 
   var simplifiedTransfers = [];
   var totalDrinkingOutstanding = 0;
   var debtorTransferCount = {};
-  var iD = 0;
-  var iC = 0;
-  while (iD < debtors.length && iC < creditors.length) {
-    var dItem = debtors[iD];
-    var cItem = creditors[iC];
-    var transferAmt = Math.min(dItem.amount, cItem.amount);
+  for (var rei = 0; rei < rawEdges.length; rei++) {
+    var re = rawEdges[rei];
+    var fromName = membersMap[re.fromId] ? membersMap[re.fromId].name : re.fromId;
+    var toName = membersMap[re.toId] ? membersMap[re.toId].name : re.toId;
+    var toMember = membersMap[re.toId] || null;
+    var content = stripVietnameseDiacritics_(
+      settings.transfer_prefix + ' ' + fromName + ' tra ' + toName + ' nhau'
+    ).slice(0, 50);
 
-    if (transferAmt > 0) {
-      var toMember = membersMap[cItem.memberId] || null;
-      var content = stripVietnameseDiacritics_(
-        settings.transfer_prefix + ' ' + dItem.name + ' tra ' + cItem.name + ' nhau'
-      ).slice(0, 50);
-
-      debtorTransferCount[dItem.memberId] = (debtorTransferCount[dItem.memberId] || 0) + 1;
-      simplifiedTransfers.push({
-        fromMemberId: dItem.memberId,
-        fromName: dItem.name,
-        toMemberId: cItem.memberId,
-        toName: cItem.name,
-        amount: transferAmt,
-        transferContent: content,
-        isSplitFromMultipleTransfers: false,
-        toBank: toMember ? {
-          bankBin: toMember.bank_bin,
-          bankName: toMember.bank_name,
-          accountNo: toMember.account_no,
-          accountName: toMember.account_name
-        } : null,
-        vietQrUrl: buildVietQrUrl_(toMember, transferAmt, content, settings.vietqr_template)
-      });
-      totalDrinkingOutstanding += transferAmt;
-    }
-
-    dItem.amount -= transferAmt;
-    cItem.amount -= transferAmt;
-    if (dItem.amount === 0) iD++;
-    if (cItem.amount === 0) iC++;
+    debtorTransferCount[re.fromId] = (debtorTransferCount[re.fromId] || 0) + 1;
+    simplifiedTransfers.push({
+      fromMemberId: re.fromId,
+      fromName: fromName,
+      toMemberId: re.toId,
+      toName: toName,
+      amount: re.amount,
+      transferContent: content,
+      isSplitFromMultipleTransfers: false,
+      toBank: toMember ? {
+        bankBin: toMember.bank_bin,
+        bankName: toMember.bank_name,
+        accountNo: toMember.account_no,
+        accountName: toMember.account_name
+      } : null,
+      vietQrUrl: buildVietQrUrl_(toMember, re.amount, content, settings.vietqr_template)
+    });
+    totalDrinkingOutstanding += re.amount;
   }
   for (var sti = 0; sti < simplifiedTransfers.length; sti++) {
     simplifiedTransfers[sti].isSplitFromMultipleTransfers =
