@@ -33,7 +33,11 @@ function doGet(e) {
       case 'bootstrap':
         data = {
           settings: getSettingsMap(),
-          members: getMembersList(false)
+          members: getMembersList(false),
+          closedMonths: getSheetObjects_('Monthly_Bills')
+            .filter(function (b) { return String(b.status || '').trim().toUpperCase() === 'CLOSED'; })
+            .map(function (b) { return String(b.month || '').trim(); })
+            .filter(Boolean)
         };
         break;
 

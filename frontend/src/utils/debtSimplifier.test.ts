@@ -318,4 +318,79 @@ describe('debtSimplifier (Tách biệt Cầu lông & Ăn nhậu)', () => {
     expect(badRes.totalAdhocUnpaid).toBe(200000);
     expect(badRes.totalOutstanding).toBe(200000);
   });
+
+  it('Phát hiện imbalanceAmount khi bị lệch tổng chủ nợ / con nợ và đánh dấu isSplitFromMultipleTransfers', () => {
+    const splitSession = makeSession('SES_SPLIT', '2026-11-25', 'DRINKING', 'Nhậu chia 2 chủ nợ', 'MEM_001');
+    const splitAtts: Attendance[] = [
+      {
+        attendance_id: 'ATT_S1',
+        session_id: 'SES_SPLIT',
+        session_date: '2026-11-25',
+        session_type: 'DRINKING',
+        member_id: 'MEM_001',
+        member_type_snapshot: 'MAIN',
+        fee_amount: 100000,
+        creditor_id: 'MEM_001',
+        contributed_amount: 200000,
+        net_amount: -100000,
+        is_paid: false,
+        paid_at: '',
+        settlement_id: '',
+        note: '',
+      },
+      {
+        attendance_id: 'ATT_S2',
+        session_id: 'SES_SPLIT',
+        session_date: '2026-11-25',
+        session_type: 'DRINKING',
+        member_id: 'MEM_002',
+        member_type_snapshot: 'MAIN',
+        fee_amount: 100000,
+        creditor_id: 'MEM_002',
+        contributed_amount: 300000,
+        net_amount: -200000,
+        is_paid: false,
+        paid_at: '',
+        settlement_id: '',
+        note: '',
+      },
+      {
+        attendance_id: 'ATT_S3',
+        session_id: 'SES_SPLIT',
+        session_date: '2026-11-25',
+        session_type: 'DRINKING',
+        member_id: 'MEM_003',
+        member_type_snapshot: 'MAIN',
+        fee_amount: 300000,
+        creditor_id: 'MEM_001',
+        contributed_amount: 0,
+        net_amount: 300000,
+        is_paid: false,
+        paid_at: '',
+        settlement_id: '',
+        note: '',
+      },
+    ];
+
+    const splitRes = simplifyDebts({
+      attendances: splitAtts,
+      sessions: [splitSession],
+      members,
+    });
+    expect(splitRes.imbalanceAmount).toBe(0);
+    expect(splitRes.transfers).toHaveLength(2);
+    expect(splitRes.transfers.every((t) => t.isSplitFromMultipleTransfers === true)).toBe(true);
+
+    // Nếu tạo thêm khoản lệch giả lập (ví dụ thanh toán 1 phần lệch) -> imbalanceAmount != 0
+    const skewedAtts: Attendance[] = [
+      ...splitAtts.slice(0, 2),
+      { ...splitAtts[2], net_amount: 250000 },
+    ];
+    const skewedRes = simplifyDebts({
+      attendances: skewedAtts,
+      sessions: [splitSession],
+      members,
+    });
+    expect(skewedRes.imbalanceAmount).toBe(50000);
+  });
 });

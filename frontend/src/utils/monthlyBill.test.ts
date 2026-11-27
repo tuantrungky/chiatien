@@ -153,4 +153,29 @@ describe('monthlyBill', () => {
     expect(res.carryOverCredits).toHaveLength(1);
     expect(res.carryOverCredits[0].amount).toBe(380000);
   });
+
+  it('Góp cầu từ người không nằm trong MAIN tạo refundCredits và trừ đúng khỏi carryOut', () => {
+    const res = calculateDetailedMonthlyBill({
+      courtFee: 1600000,
+      shuttleTubeQty: 0,
+      shuttleTubePrice: 0,
+      prevOvertimeFee: 0,
+      carryIn: 0,
+      actualCost: 1600000,
+      guestIncome: 200000,
+      memberIds: ['M1', 'M2', 'M3', 'M4'],
+      appliedCredits: [
+        { id: 'CG', member_id: 'GUEST_X', member_name: 'Khách A', tube_qty: 1, unit_price: 400000, amount: 400000 },
+      ],
+      roundingUnit: 1000,
+    });
+
+    expect(res.perMember).toBe(500000); // (1.600.000 + 400.000) / 4
+    expect(res.billedTotal).toBe(2000000);
+    expect(res.refundCredits).toHaveLength(1);
+    expect(res.refundCreditsTotal).toBe(400000);
+    expect(res.carryOverCredits).toHaveLength(0);
+    // carryOut = carryIn(0) + billedTotal(2.000.000) + guestIncome(200.000) - actualCost(1.600.000) - refundCreditsTotal(400.000) = 200.000
+    expect(res.carryOut).toBe(200000);
+  });
 });

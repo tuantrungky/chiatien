@@ -21,6 +21,8 @@ export interface DrinkingSplitResult {
   totalAmount: number;
   perPersonAmount: number;
   splits: DrinkingPersonSplit[];
+  roundingAdjustment: number;
+  roundingAdjustedMemberId: string | null;
 }
 
 export function calculateDrinkingSplit(
@@ -50,7 +52,13 @@ export function calculateDrinkingSplit(
   );
 
   if (allParticipantIds.length === 0) {
-    return { totalAmount: 0, perPersonAmount: 0, splits: [] };
+    return {
+      totalAmount: 0,
+      perPersonAmount: 0,
+      splits: [],
+      roundingAdjustment: 0,
+      roundingAdjustedMemberId: null,
+    };
   }
 
   const perPersonAmount =
@@ -72,6 +80,8 @@ export function calculateDrinkingSplit(
 
   // Bù sai số làm tròn (nếu có) vào người góp nhiều nhất (hoặc người đầu tiên) để sum(netAmount) === 0
   const netSum = splits.reduce((acc, s) => acc + s.netAmount, 0);
+  let roundingAdjustment = 0;
+  let roundingAdjustedMemberId: string | null = null;
   if (netSum !== 0 && splits.length > 0) {
     let targetIdx = 0;
     let maxContributed = -1;
@@ -83,11 +93,15 @@ export function calculateDrinkingSplit(
     }
     splits[targetIdx].netAmount -= netSum;
     splits[targetIdx].isPaid = splits[targetIdx].netAmount === 0;
+    roundingAdjustment = -netSum;
+    roundingAdjustedMemberId = splits[targetIdx].memberId;
   }
 
   return {
     totalAmount,
     perPersonAmount,
     splits,
+    roundingAdjustment,
+    roundingAdjustedMemberId,
   };
 }

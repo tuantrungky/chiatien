@@ -624,13 +624,18 @@ export const firebaseProvider: DataProvider = {
   async fetchBootstrap(): Promise<BootstrapData> {
     try {
       const db = getFirebaseDb();
-      const [settings, membersSnap] = await Promise.all([
+      const [settings, membersSnap, billsSnap] = await Promise.all([
         fetchSettingsDoc(),
         getDocs(collection(db, 'members')),
+        getDocs(collection(db, 'monthly_bills')),
       ]);
+      const closedMonths = snapToDocs<MonthlyBill>(billsSnap)
+        .filter((b) => b.status === 'CLOSED')
+        .map((b) => b.month);
       return {
         settings,
         members: snapToDocs<Member>(membersSnap),
+        closedMonths,
       };
     } catch (err) {
       mapFirebaseError(err);
@@ -904,24 +909,41 @@ export const firebaseProvider: DataProvider = {
       try {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
-        const [dataset, targetSetSnap, bySettlementAttSnap] = await Promise.all([
+        const [dataset, targetSetSnap, bySettlementAttSnap, allDrinkingSetSnap] = await Promise.all([
           fetchScopedDataset({ activeMonth: getTodayDateStr().slice(0, 7) }),
           getDoc(doc(db, 'settlements', settlementId)),
           getDocs(query(collection(db, 'attendance'), where('settlement_id', '==', settlementId))),
+          getDocs(query(collection(db, 'settlements'), where('category', '==', 'DRINKING'))),
         ]);
 
         const targetSet = targetSetSnap.exists() ? (targetSetSnap.data() as Settlement) : null;
-        if (targetSet) {
-          dataset.settlements = dedupeById(
-            [...dataset.settlements, targetSet],
-            (s) => s.settlement_id
-          );
-        }
+        const drinkingSets = snapToDocs<Settlement>(allDrinkingSetSnap);
+        dataset.settlements = dedupeById(
+          [...dataset.settlements, ...drinkingSets, ...(targetSet ? [targetSet] : [])],
+          (s) => s.settlement_id
+        );
+
         const extraAtts = snapToDocs<Attendance>(bySettlementAttSnap);
         const sourceAttIds = String(targetSet?.source_attendance_ids || '')
           .split(',')
           .map((x) => x.trim())
           .filter(Boolean);
+
+        // Nếu targetSet nằm trong một đợt chốt SIMPLIFIED_TRANSFER, tải thêm các attendance của giao dịch chốt đợt
+        if (targetSet && targetSet.is_reconciled && sourceAttIds.length === 0) {
+          const closingSt = dataset.settlements.find((s) => {
+            const raw = String(s.source_ledger_ids || '').trim();
+            if (!raw.startsWith('REC:')) return false;
+            const ids = raw.slice(4).split(',').map((x) => x.trim());
+            return ids.includes(settlementId);
+          });
+          if (closingSt && closingSt.settlement_id !== settlementId) {
+            const closingAttSnap = await getDocs(
+              query(collection(db, 'attendance'), where('settlement_id', '==', closingSt.settlement_id))
+            );
+            extraAtts.push(...snapToDocs<Attendance>(closingAttSnap));
+          }
+        }
         if (sourceAttIds.length > 0) {
           const existingAttIds = new Set([...dataset.attendance, ...extraAtts].map((a) => a.attendance_id));
           const missingAttIds = sourceAttIds.filter((id) => !existingAttIds.has(id));

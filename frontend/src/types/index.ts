@@ -149,6 +149,8 @@ export interface MonthlyBillDetail {
   carryInOverride?: boolean;
   carryOutOverride?: number | null;
   appliedCredits?: ShuttleContributionItem[];
+  refundCredits?: ShuttleContributionItem[];
+  refundCreditsTotal?: number;
   note?: string;
 }
 
@@ -176,6 +178,7 @@ export interface MonthlyBill {
   bill_detail?: string;
   shuttle_contributions?: string;
   applied_credits_total?: number;
+  refund_credits_total?: number;
   carry_over_credits?: string;
   logged_sessions_cost?: number;
   is_projected_cost?: boolean;
@@ -308,6 +311,7 @@ export interface PeriodRange {
 export interface BootstrapData {
   settings: SettingsMap;
   members: Member[];
+  closedMonths?: string[];
 }
 
 export interface BankInfo {
@@ -396,6 +400,8 @@ export interface DrinkingDebtsData {
   simplifiedTransfers: SimplifiedTransfer[];
   unpaidAttendances: Attendance[];
   recentSettlements: Settlement[];
+  unreconciledSettlements?: Settlement[];
+  imbalanceAmount?: number;
   totalOutstanding: number;
 }
 
@@ -410,6 +416,7 @@ export interface DashboardData {
   currentMonth: string;
   badminton: {
     periodCost: number;
+    monthlyBillCostInPeriod?: number;
     sessionCount: number;
     fixedSessionCount?: number;
     adhocSessionCount?: number;
@@ -454,6 +461,7 @@ export interface MonthlyBillData {
   suggestedPrevOvertime?: number;
   contributions?: ShuttleContributionItem[];
   prevMonthContributions?: ShuttleContributionItem[];
+  refundCredits?: ShuttleContributionItem[];
 }
 
 export interface GuestStatSessionItem {
@@ -484,6 +492,7 @@ export interface GuestStatsData {
     totalFee: number;
     totalPaid: number;
     totalUnpaid: number;
+    collectedInMonthAmount?: number;
   };
   guests: GuestStatItem[];
 }
@@ -525,12 +534,14 @@ export interface SimplifiedTransferDetail {
   transferContent: string;
   vietQrUrl: string | null;
   breakdownSessions: DebtBreakdownSession[];
+  isSplitFromMultipleTransfers?: boolean;
 }
 
 export interface SimplifiedDebtResult {
   netBalances: NetBalanceItem[];
   transfers: SimplifiedTransferDetail[];
   totalOutstanding: number;
+  imbalanceAmount?: number;
 }
 
 // ============================================================================

@@ -173,10 +173,10 @@ export function useClubData(): UseClubDataResult {
   }, [loadAll]);
 
   const simplifiedDrinkingDebts = useMemo<SimplifiedDebtResult>(() => {
-    if (!allData) return { netBalances: [], transfers: [], totalOutstanding: 0 };
-    const unreconciled = allData.debts.drinking.recentSettlements.filter(
-      (s) => !s.is_reconciled
-    );
+    if (!allData) return { netBalances: [], transfers: [], totalOutstanding: 0, imbalanceAmount: 0 };
+    const unreconciled =
+      allData.debts.drinking.unreconciledSettlements ??
+      allData.debts.drinking.recentSettlements.filter((s) => !s.is_reconciled);
     return simplifyDebts({
       attendances: allData.debts.drinking.unpaidAttendances,
       sessions: allData.sessions,

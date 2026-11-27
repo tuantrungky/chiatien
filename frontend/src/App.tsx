@@ -276,6 +276,7 @@ export default function App() {
                     }
                     members={bootstrap.members}
                     settings={bootstrap.settings}
+                    closedMonths={bootstrap.closedMonths || []}
                     editingSession={editingSession}
                     prefillPlan={prefillPlan}
                     initialType={createInitialType}

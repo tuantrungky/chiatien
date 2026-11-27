@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyMutationPlanToDataset,
   buildAllData,
+  buildDashboardData,
+  buildDebtsData,
+  buildGuestStatsData,
   buildMonthlyBillData,
   planCloseMonth,
   planConfirmPayment,
@@ -170,8 +173,8 @@ describe('domainEngine - SheetService.gs Parity', () => {
       ds,
       {
         month: '2026-11',
-        estimate: 600000,
-        courtFee: 600000,
+        estimate: 900000,
+        courtFee: 900000,
         memberIds: ['MEM_001', 'MEM_002', 'MEM_003', 'MEM_004'],
         appliedCredits: [
           {
@@ -262,6 +265,269 @@ describe('domainEngine - SheetService.gs Parity', () => {
 
     const all = buildAllData(ds, 'MONTH', '2026-11-26', '2026-11');
     expect(all.bootstrap.members).toHaveLength(6);
+    expect(all.bootstrap.closedMonths).toBeDefined();
     expect(all.schedule.days.length).toBeGreaterThan(0);
+  });
+
+  it('planIssueMonthlyBill xử lý oldPaidMap đổi số tiền, refundCredits không thuộc MAIN, syncMemberTypes và scheduleConfig', () => {
+    const ds = createTestDataset();
+    // Phát hành lần 1
+    const issue1 = planIssueMonthlyBill(
+      ds,
+      {
+        month: '2026-11',
+        estimate: 2000000,
+        memberIds: ['MEM_001', 'MEM_002', 'MEM_003', 'MEM_004'],
+        appliedCredits: [],
+      },
+      'tuantrungky@gmail.com'
+    );
+    let dsCur = applyMutationPlanToDataset(ds, issue1);
+    const due3 = dsCur.monthly_dues.find((d) => d.month === '2026-11' && d.member_id === 'MEM_003')!;
+    dsCur = applyMutationPlanToDataset(
+      dsCur,
+      planMarkDuePaid(dsCur, { dueId: due3.due_id, isPaid: true }, 'tuantrungky@gmail.com')
+    );
+
+    // Chia lại lần 2: tăng dự toán + đổi MEM_005 thành MAIN, MEM_004 thành GUEST + MEM_006 (GUEST) góp cầu
+    const issue2 = planIssueMonthlyBill(
+      dsCur,
+      {
+        month: '2026-11',
+        estimate: 2400000,
+        memberIds: ['MEM_001', 'MEM_002', 'MEM_003', 'MEM_005'],
+        syncMemberTypes: true,
+        appliedCredits: [
+          { id: 'CR_G', member_id: 'MEM_006', tube_qty: 1, unit_price: 200000, amount: 200000 },
+        ],
+        scheduleConfig: { weekdays: [1, 3], startTime: '20:00', endTime: '21:30', courts: 2 },
+      },
+      'tuantrungky@gmail.com'
+    );
+    const dsAfter = applyMutationPlanToDataset(dsCur, issue2);
+    const reDue3 = dsAfter.monthly_dues.find((d) => d.month === '2026-11' && d.member_id === 'MEM_003')!;
+    // Số tiền thay đổi -> reset is_paid=false và gắn ghi chú chênh lệch
+    expect(reDue3.is_paid).toBe(false);
+    expect(reDue3.credit_note).toContain('Đã đóng trước');
+
+    // syncMemberTypes cập nhật type của MEM_005 -> MAIN, MEM_004 -> GUEST
+    expect(dsAfter.members.find((m) => m.member_id === 'MEM_005')?.type).toBe('MAIN');
+    expect(dsAfter.members.find((m) => m.member_id === 'MEM_004')?.type).toBe('GUEST');
+
+    // refundCredits của MEM_006 được ghi nhận và trừ khi closeMonth
+    expect(issue2.result.refundCredits).toHaveLength(1);
+    expect(issue2.result.bill.refund_credits_total).toBe(200000);
+    const closePlan = planCloseMonth(
+      dsAfter,
+      { month: '2026-11', actualCostOverride: 1000000 },
+      'tuantrungky@gmail.com'
+    );
+    expect(closePlan.result.bill.carry_out).toBe(
+      closePlan.result.bill.carry_in +
+        closePlan.result.bill.billed_total +
+        closePlan.result.bill.guest_income -
+        1000000 -
+        200000
+    );
+  });
+
+  it('confirmPayment (DRINKING ITEMS) phân bổ nhiều chủ nợ & undoSettlement replay đúng giao dịch còn lại', () => {
+    const ds = createTestDataset();
+    ds.settlements = [];
+    ds.attendance = [];
+    ds.sessions = [];
+    ds.session_items = [];
+
+    const createPlan = planCreateSession(
+      ds,
+      {
+        date: '2026-11-28',
+        type: 'DRINKING',
+        title: 'Nhậu 2 chủ nợ',
+        totalAmount: 400000,
+        payerId: 'MEM_001',
+        attendeeIds: ['MEM_001', 'MEM_002', 'MEM_003', 'MEM_004'],
+        items: [
+          { member_id: 'MEM_001', kind: 'BILL', item_name: 'Hóa đơn 1', amount: 150000 },
+          { member_id: 'MEM_002', kind: 'ITEM', item_name: 'Mồi 2', amount: 250000 },
+        ],
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds1 = applyMutationPlanToDataset(ds, createPlan);
+    // Mỗi người 100k -> MEM_001 (-50k), MEM_002 (-150k), MEM_003 (+100k), MEM_004 (+100k)
+    const att3 = ds1.attendance.find((a) => a.member_id === 'MEM_003')!;
+    const att4 = ds1.attendance.find((a) => a.member_id === 'MEM_004')!;
+
+    // MEM_003 trả 100k, ưu tiên MEM_001 (-50k -> 0đ), dư 50k trừ sang MEM_002 (-150k -> -100k)
+    const pay3 = planConfirmPayment(
+      ds1,
+      {
+        category: 'DRINKING',
+        mode: 'ITEMS',
+        fromMemberId: 'MEM_003',
+        toMemberId: 'MEM_001',
+        attendanceIds: [att3.attendance_id],
+        method: 'VIETQR',
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds2 = applyMutationPlanToDataset(ds1, pay3);
+    const sumAfterPay3 = ds2.attendance.reduce((s, a) => s + a.net_amount, 0);
+    expect(sumAfterPay3).toBe(0);
+    expect(ds2.attendance.find((a) => a.member_id === 'MEM_001')?.net_amount).toBe(0);
+    expect(ds2.attendance.find((a) => a.member_id === 'MEM_002')?.net_amount).toBe(-100000);
+
+    // MEM_004 trả 100k cho MEM_002 -> đóng toàn bộ buổi
+    const pay4 = planConfirmPayment(
+      ds2,
+      {
+        category: 'DRINKING',
+        mode: 'ITEMS',
+        fromMemberId: 'MEM_004',
+        toMemberId: 'MEM_002',
+        attendanceIds: [att4.attendance_id],
+        method: 'VIETQR',
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds3 = applyMutationPlanToDataset(ds2, pay4);
+    expect(ds3.attendance.every((a) => a.is_paid)).toBe(true);
+
+    // Hoàn tác pay3 -> replay pay4 -> MEM_004 vẫn paid, MEM_003 nợ 100k, MEM_001 (-50k) + MEM_002 (-50k)
+    const undo3 = planUndoSettlement(ds3, pay3.result.settlement.settlement_id);
+    const ds4 = applyMutationPlanToDataset(ds3, undo3);
+    expect(ds4.attendance.find((a) => a.member_id === 'MEM_004')?.is_paid).toBe(true);
+    expect(ds4.attendance.find((a) => a.member_id === 'MEM_003')?.is_paid).toBe(false);
+    expect(ds4.attendance.find((a) => a.member_id === 'MEM_003')?.net_amount).toBe(100000);
+    expect(ds4.attendance.find((a) => a.member_id === 'MEM_001')?.net_amount).toBe(-50000);
+    expect(ds4.attendance.find((a) => a.member_id === 'MEM_002')?.net_amount).toBe(-50000);
+    expect(ds4.attendance.reduce((s, a) => s + a.net_amount, 0)).toBe(0);
+  });
+
+  it('SIMPLIFIED_TRANSFER ghi REC: vào source_ledger_ids và undo mở lại cả đợt chốt', () => {
+    const ds = createTestDataset();
+    ds.settlements = [];
+    ds.attendance = [];
+    ds.sessions = [];
+    ds.session_items = [];
+
+    const sPlan = planCreateSession(
+      ds,
+      {
+        date: '2026-11-28',
+        type: 'DRINKING',
+        title: 'Nhậu chốt đợt',
+        totalAmount: 300000,
+        payerId: 'MEM_001',
+        attendeeIds: ['MEM_001', 'MEM_002', 'MEM_003'],
+        items: [{ member_id: 'MEM_001', kind: 'BILL', item_name: 'Bill', amount: 300000 }],
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds1 = applyMutationPlanToDataset(ds, sPlan);
+
+    const p1 = planConfirmPayment(
+      ds1,
+      {
+        category: 'DRINKING',
+        mode: 'SIMPLIFIED_TRANSFER',
+        fromMemberId: 'MEM_002',
+        toMemberId: 'MEM_001',
+        amount: 100000,
+        method: 'VIETQR',
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds2 = applyMutationPlanToDataset(ds1, p1);
+    expect(p1.result.settlement.is_reconciled).toBe(false);
+
+    const p2 = planConfirmPayment(
+      ds2,
+      {
+        category: 'DRINKING',
+        mode: 'SIMPLIFIED_TRANSFER',
+        fromMemberId: 'MEM_003',
+        toMemberId: 'MEM_001',
+        amount: 100000,
+        method: 'VIETQR',
+      },
+      'tuantrungky@gmail.com'
+    );
+    const ds3 = applyMutationPlanToDataset(ds2, p2);
+    expect(p2.result.settlement.is_reconciled).toBe(true);
+    expect(p2.result.settlement.source_ledger_ids).toContain('REC:');
+    expect(ds3.attendance.every((a) => a.is_paid)).toBe(true);
+
+    // Hoàn tác p1 -> attendance mở lại và p2 quay về is_reconciled=false
+    const u1 = planUndoSettlement(ds3, p1.result.settlement.settlement_id);
+    const ds4 = applyMutationPlanToDataset(ds3, u1);
+    expect(ds4.attendance.some((a) => !a.is_paid)).toBe(true);
+    const sibling = ds4.settlements.find((s) => s.settlement_id === p2.result.settlement.settlement_id);
+    expect(sibling?.is_reconciled).toBe(false);
+    expect(buildDebtsData(ds4).drinking.totalOutstanding).toBe(100000);
+  });
+
+  it('planUpdateSession cho phép sửa tiêu đề/ghi chú/ảnh trên buổi đã đối soát', () => {
+    const ds = createTestDataset();
+    const settledSess = ds.sessions.find((s) => s.session_id === 'SES_20261118_001')!;
+    const attIds = ds.attendance
+      .filter((a) => a.session_id === 'SES_20261118_001')
+      .map((a) => a.member_id);
+
+    const metaPlan = planUpdateSession(ds, {
+      sessionId: settledSess.session_id,
+      date: settledSess.date,
+      type: settledSess.type,
+      billingMode: settledSess.billing_mode,
+      totalAmount: settledSess.total_amount,
+      guestFee: settledSess.guest_fee,
+      payerId: settledSess.payer_id,
+      attendeeIds: attIds,
+      title: 'Tiêu đề đã sửa hợp lệ',
+      note: 'Ghi chú mới',
+      receiptUrl: 'https://example.com/receipt.jpg',
+    });
+    expect(metaPlan.result.session.title).toBe('Tiêu đề đã sửa hợp lệ');
+    expect(metaPlan.deletes.attendance).toBeUndefined();
+    const dsAfter = applyMutationPlanToDataset(ds, metaPlan);
+    expect(dsAfter.attendance.find((a) => a.attendance_id === 'ATT_003')?.settlement_id).toBe(
+      'SET_BAD_001'
+    );
+  });
+
+  it('buildDashboardData tính monthlyBillCostInPeriod cho MONTH/QUARTER và bỏ qua WEEK; buildGuestStatsData tách collectedInMonthAmount', () => {
+    const ds = createTestDataset();
+    const issue = planIssueMonthlyBill(
+      ds,
+      {
+        month: '2026-11',
+        estimate: 2000000,
+        courtFee: 2000000,
+        memberIds: ['MEM_001', 'MEM_002', 'MEM_003', 'MEM_004'],
+      },
+      'tuantrungky@gmail.com'
+    );
+    const dsIssued = applyMutationPlanToDataset(ds, issue);
+    const dashMonth = buildDashboardData(dsIssued, 'MONTH', '2026-11-26');
+    const dashWeek = buildDashboardData(dsIssued, 'WEEK', '2026-11-26');
+    expect(dashMonth.badminton.monthlyBillCostInPeriod).toBeGreaterThan(0);
+    expect(dashMonth.badminton.periodCost).toBeGreaterThanOrEqual(
+      dashMonth.badminton.monthlyBillCostInPeriod!
+    );
+    expect(dashWeek.badminton.monthlyBillCostInPeriod).toBe(0);
+
+    // Gán một guest attendance chơi tháng 2026-11 nhưng paid_at tháng 2026-12
+    const novGuestAtt = dsIssued.attendance.find(
+      (a) => a.session_type === 'BADMINTON' && a.member_type_snapshot === 'GUEST'
+    );
+    if (novGuestAtt) {
+      novGuestAtt.is_paid = true;
+      novGuestAtt.paid_at = '2026-12-03T10:00:00+07:00';
+      const statsNov = buildGuestStatsData(dsIssued, '2026-11');
+      const statsDec = buildGuestStatsData(dsIssued, '2026-12');
+      expect(statsNov.summary.totalPaid).toBeGreaterThanOrEqual(novGuestAtt.fee_amount);
+      expect(statsDec.summary.collectedInMonthAmount).toBeGreaterThanOrEqual(novGuestAtt.fee_amount);
+    }
   });
 });

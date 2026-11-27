@@ -50,6 +50,7 @@ import { formatVND } from '../utils/vietqr';
 interface CreateSessionPageProps {
   members: Member[];
   settings: SettingsMap;
+  closedMonths?: string[];
   editingSession: Session | null;
   prefillPlan: ScheduleDay | null;
   initialType?: SessionType;
@@ -68,6 +69,7 @@ interface QuickGuestItem {
 export function CreateSessionPage({
   members,
   settings,
+  closedMonths = [],
   editingSession,
   prefillPlan,
   initialType = 'BADMINTON',
@@ -174,12 +176,16 @@ export function CreateSessionPage({
   const [aiBillLoading, setAiBillLoading] = useState<boolean>(false);
 
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
+  const [hasSettledAttendances, setHasSettledAttendances] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Nạp dữ liệu khi Sửa buổi cũ
   useEffect(() => {
-    if (!editingSession) return;
+    if (!editingSession) {
+      setHasSettledAttendances(false);
+      return;
+    }
     let cancelled = false;
     setLoadingDetail(true);
     setSessionType(editingSession.type);
@@ -230,6 +236,7 @@ export function CreateSessionPage({
     fetchSessionDetail(editingSession.session_id)
       .then((detail) => {
         if (cancelled) return;
+        setHasSettledAttendances(detail.attendances.some((a) => Boolean(a.settlement_id)));
         setSelectedIds(detail.attendances.map((a) => a.member_id));
         const payerForEdit = editingSession.payer_id || defaultTreasurerId;
         setPaidImmediatelyIds(
@@ -324,7 +331,15 @@ export function CreateSessionPage({
   );
 
   const drinkingSplitPreview = useMemo(() => {
-    if (sessionType !== 'DRINKING') return { totalAmount: 0, perPersonAmount: 0, splits: [] };
+    if (sessionType !== 'DRINKING') {
+      return {
+        totalAmount: 0,
+        perPersonAmount: 0,
+        splits: [],
+        roundingAdjustment: 0,
+        roundingAdjustedMemberId: '',
+      };
+    }
     return calculateDrinkingSplit(
       selectedIds,
       drinkingItems,
@@ -533,6 +548,19 @@ export function CreateSessionPage({
       return;
     }
 
+    const sessionMonth = date.slice(0, 7);
+    if (
+      !hasSettledAttendances &&
+      sessionType === 'BADMINTON' &&
+      billingMode === 'MONTHLY' &&
+      closedMonths.includes(sessionMonth)
+    ) {
+      const ok = window.confirm(
+        `Tháng ${sessionMonth.slice(5, 7)}/${sessionMonth.slice(0, 4)} đã CHỐT KỲ. Buổi cố định mới (khách vãng lai / sân thêm giờ) sẽ cần lưu ý khi đối chiếu lại tháng. Bạn vẫn muốn lưu?`
+      );
+      if (!ok) return;
+    }
+
     const finalTitle =
       title.trim() ||
       (sessionType === 'BADMINTON'
@@ -656,13 +684,24 @@ export function CreateSessionPage({
         </div>
       )}
 
+      {hasSettledAttendances && (
+        <div className="rounded-2xl bg-amber-50 border border-amber-300 p-3 flex items-start gap-2 text-xs text-amber-900">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <span>
+            Buổi này đã có khoản thanh toán đối soát nên <strong>khóa sửa số tiền &amp; người tham gia</strong>.
+            Bạn vẫn có thể sửa <strong>Tiêu đề, Ghi chú</strong> và <strong>Ảnh hóa đơn</strong>.
+          </span>
+        </div>
+      )}
+
       {/* 1. Loại buổi & Ngày / Tiêu đề */}
       <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3 shadow-xs">
         <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
           <button
             type="button"
+            disabled={hasSettledAttendances}
             onClick={() => setSessionType('BADMINTON')}
-            className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
               sessionType === 'BADMINTON'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -673,8 +712,9 @@ export function CreateSessionPage({
           </button>
           <button
             type="button"
+            disabled={hasSettledAttendances}
             onClick={() => setSessionType('DRINKING')}
-            className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
               sessionType === 'DRINKING'
                 ? 'bg-orange-500 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -691,9 +731,10 @@ export function CreateSessionPage({
             <input
               type="date"
               value={date}
+              disabled={hasSettledAttendances}
               onChange={(e) => setDate(e.target.value)}
               required
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100 disabled:text-slate-500"
             />
           </div>
           <div>
@@ -712,7 +753,9 @@ export function CreateSessionPage({
 
         {sessionType === 'BADMINTON' && (
           <label
-            className={`flex items-start gap-2.5 p-3 rounded-xl border transition cursor-pointer ${
+            className={`flex items-start gap-2.5 p-3 rounded-xl border transition ${
+              hasSettledAttendances ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+            } ${
               billingMode === 'AD_HOC'
                 ? 'bg-sky-50 border-sky-300'
                 : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
@@ -720,6 +763,7 @@ export function CreateSessionPage({
           >
             <input
               type="checkbox"
+              disabled={hasSettledAttendances}
               checked={billingMode === 'AD_HOC'}
               onChange={(e) => handleToggleBillingMode(e.target.checked)}
               className="mt-0.5 w-4 h-4 accent-sky-600"
@@ -799,6 +843,7 @@ export function CreateSessionPage({
         </div>
       </section>
 
+      <fieldset disabled={hasSettledAttendances} className="space-y-4 disabled:opacity-75">
       {/* 2A. CHI PHÍ CẦU LÔNG */}
       {sessionType === 'BADMINTON' && billingMode === 'MONTHLY' && (
         <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3.5 shadow-xs">
@@ -1527,6 +1572,7 @@ export function CreateSessionPage({
           </button>
         </div>
       </section>
+      </fieldset>
 
       {/* 4. XEM TRƯỚC PHÂN BỔ TIỀN */}
       <section className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2.5 shadow-xs">
@@ -1690,6 +1736,23 @@ export function CreateSessionPage({
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {sessionType === 'DRINKING' && drinkingSplitPreview.roundingAdjustment !== 0 && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-900">
+            Làm tròn {formatVND(settings.rounding_unit || 1000)}: bù lệch{' '}
+            <strong>
+              {drinkingSplitPreview.roundingAdjustment > 0 ? '+' : ''}
+              {formatVND(drinkingSplitPreview.roundingAdjustment)}
+            </strong>{' '}
+            cho{' '}
+            <strong>
+              {activeMembers.find(
+                (m) => m.member_id === drinkingSplitPreview.roundingAdjustedMemberId
+              )?.name || 'người nhận nhiều nhất'}
+            </strong>{' '}
+            để tổng chia cân bằng 0đ.
           </div>
         )}
 

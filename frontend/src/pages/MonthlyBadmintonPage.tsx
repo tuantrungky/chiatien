@@ -244,9 +244,10 @@ export function MonthlyBadmintonPage({
     setManualVenueTotalStr(String(bill?.estimate ?? suggestedCourt));
     setCarryInStr(String(bill?.carry_in ?? 0));
 
+    const hasSavedCredits = Array.isArray(parsedDetail.appliedCredits);
     const existingApplied =
-      parsedDetail.appliedCredits && parsedDetail.appliedCredits.length > 0
-        ? parsedDetail.appliedCredits
+      dues.length > 0 || hasSavedCredits
+        ? parsedDetail.appliedCredits || []
         : prevMonthContributions;
     setAppliedCredits(existingApplied.map((c) => ({ ...c })));
 
@@ -711,8 +712,25 @@ export function MonthlyBadmintonPage({
                     : `Chi: ${formatVND(bill?.actual_cost ?? 0)}`}{' '}
                   • VL thu: {formatVND(bill?.guest_income ?? 0)}
                 </p>
+                <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                  Sân thêm giờ phát sinh (nếu có) sẽ được cộng vào hóa đơn tháng sau.
+                </p>
               </div>
             </div>
+
+            {((monthlyBill?.refundCredits?.length ?? 0) > 0 || (bill?.refund_credits_total ?? 0) > 0) && (
+              <div className="rounded-xl bg-amber-50/80 border border-amber-200 px-3 py-2 text-xs space-y-1">
+                <p className="font-bold text-amber-900">
+                  Khoản Thủ quỹ hoàn riêng cho người góp cầu không đánh MAIN ({formatVND(bill?.refund_credits_total ?? 0)}):
+                </p>
+                {(monthlyBill?.refundCredits || []).map((r) => (
+                  <p key={r.id} className="text-[11px] text-amber-800">
+                    • <span className="font-semibold">{r.member_name || r.member_id}</span>:{' '}
+                    <span className="font-bold">{formatVND(r.amount)}</span>
+                  </p>
+                ))}
+              </div>
+            )}
 
             {isEditor && (
               <div className="flex gap-2 pt-1 flex-wrap">
@@ -943,10 +961,19 @@ export function MonthlyBadmintonPage({
               </p>
             </div>
             <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center shadow-xs">
-              <p className="text-[11px] text-slate-500">Đã thu (trừ T.sau)</p>
+              <p className="text-[11px] text-slate-500">
+                Đã thu (buổi T.{activeMonth.slice(5, 7)})
+              </p>
               <p className="text-sm sm:text-base font-extrabold text-emerald-700 mt-1">
                 {formatVND(guestStats?.summary.totalPaid ?? 0)}
               </p>
+              {guestStats?.summary.collectedInMonthAmount !== undefined &&
+                guestStats.summary.collectedInMonthAmount !== guestStats.summary.totalPaid && (
+                  <p className="text-[10px] font-semibold text-blue-700 mt-0.5 leading-snug">
+                    Thực thu quỹ T.{activeMonth.slice(5, 7)}:{' '}
+                    {formatVND(guestStats.summary.collectedInMonthAmount)}
+                  </p>
+                )}
             </div>
             <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center shadow-xs">
               <p className="text-[11px] text-slate-500">Còn nợ</p>
@@ -1646,6 +1673,23 @@ export function MonthlyBadmintonPage({
                         </span>
                       </div>
                     ))}
+                </div>
+              )}
+              {issuePreview.refundCredits.length > 0 && (
+                <div className="pt-1 border-t border-amber-300/80 space-y-1">
+                  <p className="text-[11px] font-bold text-amber-900">
+                    Thủ quỹ hoàn riêng cho người góp cầu không đánh MAIN:
+                  </p>
+                  {issuePreview.refundCredits.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-amber-900">
+                        {membersMap.get(r.member_id)?.name || r.member_name || r.member_id}:
+                      </span>
+                      <span className="font-extrabold text-amber-800">
+                        Hoàn {formatVND(r.amount)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

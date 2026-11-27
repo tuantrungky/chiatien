@@ -76,6 +76,8 @@ export interface DetailedMonthlyBillResult {
   billedTotal: number;
   memberDues: DetailedMemberDueLine[];
   carryOverCredits: ShuttleContributionItem[];
+  refundCredits: ShuttleContributionItem[];
+  refundCreditsTotal: number;
   actualCost: number;
   guestIncome: number;
   carryOut: number;
@@ -131,9 +133,11 @@ export function calculateDetailedMonthlyBill(
   const unit = Math.max(1, Math.round(Number(input.roundingUnit) || 1000));
   const memberIds = Array.from(new Set((input.memberIds || []).filter(Boolean)));
   const memberCount = memberIds.length;
+  const memberIdSet = new Set(memberIds);
 
   const creditByMember = new Map<string, number>();
   const creditNotesByMember = new Map<string, string[]>();
+  const refundByMember = new Map<string, { name: string; amount: number; notes: string[] }>();
   let appliedCreditsTotal = 0;
 
   for (const cr of input.appliedCredits || []) {
@@ -145,7 +149,31 @@ export function calculateDetailedMonthlyBill(
     const existing = creditNotesByMember.get(cr.member_id) || [];
     existing.push(cr.note ? `${cr.note} - ${label}` : label);
     creditNotesByMember.set(cr.member_id, existing);
+
+    if (!memberIdSet.has(cr.member_id)) {
+      const prevRefund = refundByMember.get(cr.member_id) || {
+        name: cr.member_name || cr.member_id,
+        amount: 0,
+        notes: [],
+      };
+      prevRefund.amount += amt;
+      prevRefund.notes.push(cr.note ? `${cr.note} - ${label}` : label);
+      refundByMember.set(cr.member_id, prevRefund);
+    }
   }
+
+  const refundCredits: ShuttleContributionItem[] = Array.from(refundByMember.entries()).map(
+    ([memberId, info]) => ({
+      id: `REFUND_${memberId}`,
+      member_id: memberId,
+      member_name: info.name,
+      tube_qty: 0,
+      unit_price: 0,
+      amount: info.amount,
+      note: `Thủ quỹ hoàn riêng (không đánh MAIN): ${info.notes.join(', ')}`,
+    })
+  );
+  const refundCreditsTotal = refundCredits.reduce((s, r) => s + r.amount, 0);
 
   const toCollect = Math.max(0, venueTotal - carryIn);
   const grossToDistribute = Math.max(0, venueTotal + appliedCreditsTotal - carryIn);
@@ -188,7 +216,7 @@ export function calculateDetailedMonthlyBill(
 
   const actualCost = Math.max(0, Math.round(Number(input.actualCost) || 0));
   const guestIncome = Math.max(0, Math.round(Number(input.guestIncome) || 0));
-  const carryOut = carryIn + billedTotal + guestIncome - actualCost;
+  const carryOut = carryIn + billedTotal + guestIncome - actualCost - refundCreditsTotal;
 
   return {
     courtFee,
@@ -208,6 +236,8 @@ export function calculateDetailedMonthlyBill(
     billedTotal,
     memberDues,
     carryOverCredits,
+    refundCredits,
+    refundCreditsTotal,
     actualCost,
     guestIncome,
     carryOut,

@@ -1013,6 +1013,7 @@ function getGuestStatsData(monthStr) {
   var sumFee = 0;
   var sumPaid = 0;
   var sumUnpaid = 0;
+  var collectedInMonthAmount = 0;
 
   for (var i = 0; i < attRows.length; i++) {
     var a = attRows[i];
@@ -1020,12 +1021,20 @@ function getGuestStatsData(monthStr) {
     var mType = String(a.member_type_snapshot || '').trim().toUpperCase();
     var sType = String(a.session_type || '').trim().toUpperCase();
     var sId = String(a.session_id || '').trim();
-    if (mType !== 'GUEST' || sType !== 'BADMINTON' || sDate.slice(0, 7) !== targetMonth) continue;
+    if (mType !== 'GUEST' || sType !== 'BADMINTON') continue;
     if (adhocSessionSet[sId]) continue;
 
-    var mId = String(a.member_id || '').trim();
     var fee = toInt_(a.fee_amount, 0);
     var isPaid = toBoolean_(a.is_paid);
+    var paidAt = String(a.paid_at || '').trim();
+    var paidRefMonth = (isPaid && paidAt) ? paidAt.slice(0, 7) : sDate.slice(0, 7);
+    if (isPaid && paidRefMonth === targetMonth) {
+      collectedInMonthAmount += fee;
+    }
+
+    if (sDate.slice(0, 7) !== targetMonth) continue;
+
+    var mId = String(a.member_id || '').trim();
 
     if (!byGuest[mId]) {
       byGuest[mId] = {
@@ -1082,7 +1091,8 @@ function getGuestStatsData(monthStr) {
       totalVisits: sumVisits,
       totalFee: sumFee,
       totalPaid: sumPaid,
-      totalUnpaid: sumUnpaid
+      totalUnpaid: sumUnpaid,
+      collectedInMonthAmount: collectedInMonthAmount
     },
     guests: guests
   };
@@ -1276,6 +1286,7 @@ function computeDebtsData() {
   // --- KHỐI 2: ĂN NHẬU (chỉ cấn trừ nội bộ nhóm nhậu) + Lịch sử gạch nợ Cầu lông ---
   var settlementRows = getSheetObjects_('Settlements');
   var recentDrinkingSettlements = [];
+  var unreconciledDrinkingSettlements = [];
   var recentBadmintonSettlements = [];
   for (var ki = 0; ki < settlementRows.length; ki++) {
     var st = settlementRows[ki];
@@ -1296,7 +1307,7 @@ function computeDebtsData() {
       method: String(st.method || '').trim().toUpperCase(),
       category: stCat === 'BADMINTON' ? 'BADMINTON' : 'DRINKING',
       source_attendance_ids: String(st.source_attendance_ids || ''),
-      source_ledger_ids: '',
+      source_ledger_ids: String(st.source_ledger_ids || ''),
       is_reconciled: isRec,
       transfer_content: String(st.transfer_content || '').trim(),
       note: String(st.note || '').trim(),
@@ -1314,6 +1325,9 @@ function computeDebtsData() {
       drinkingNetMap[fromId] += sAmt;
       drinkingNetMap[toId] -= sAmt;
     }
+    if (!isRec) {
+      unreconciledDrinkingSettlements.push(stObj);
+    }
     recentDrinkingSettlements.push(stObj);
   }
   recentDrinkingSettlements.sort(function (a, b) {
@@ -1326,6 +1340,8 @@ function computeDebtsData() {
   var netBalances = [];
   var debtors = [];
   var creditors = [];
+  var totalDebtorsAmt = 0;
+  var totalCreditorsAmt = 0;
   var dIds = Object.keys(drinkingNetMap);
   for (var p = 0; p < dIds.length; p++) {
     var id = dIds[p];
@@ -1333,15 +1349,22 @@ function computeDebtsData() {
     if (bal === 0) continue;
     var name = membersMap[id] ? membersMap[id].name : id;
     netBalances.push({ memberId: id, name: name, balance: bal });
-    if (bal < 0) debtors.push({ memberId: id, name: name, amount: -bal });
-    else creditors.push({ memberId: id, name: name, amount: bal });
+    if (bal < 0) {
+      debtors.push({ memberId: id, name: name, amount: -bal });
+      totalDebtorsAmt += -bal;
+    } else {
+      creditors.push({ memberId: id, name: name, amount: bal });
+      totalCreditorsAmt += bal;
+    }
   }
+  var imbalanceAmount = totalCreditorsAmt - totalDebtorsAmt;
 
   debtors.sort(function (a, b) { return b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId); });
   creditors.sort(function (a, b) { return b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId); });
 
   var simplifiedTransfers = [];
   var totalDrinkingOutstanding = 0;
+  var debtorTransferCount = {};
   var iD = 0;
   var iC = 0;
   while (iD < debtors.length && iC < creditors.length) {
@@ -1355,6 +1378,7 @@ function computeDebtsData() {
         settings.transfer_prefix + ' ' + dItem.name + ' tra ' + cItem.name + ' nhau'
       ).slice(0, 50);
 
+      debtorTransferCount[dItem.memberId] = (debtorTransferCount[dItem.memberId] || 0) + 1;
       simplifiedTransfers.push({
         fromMemberId: dItem.memberId,
         fromName: dItem.name,
@@ -1362,6 +1386,7 @@ function computeDebtsData() {
         toName: cItem.name,
         amount: transferAmt,
         transferContent: content,
+        isSplitFromMultipleTransfers: false,
         toBank: toMember ? {
           bankBin: toMember.bank_bin,
           bankName: toMember.bank_name,
@@ -1377,6 +1402,10 @@ function computeDebtsData() {
     cItem.amount -= transferAmt;
     if (dItem.amount === 0) iD++;
     if (cItem.amount === 0) iC++;
+  }
+  for (var sti = 0; sti < simplifiedTransfers.length; sti++) {
+    simplifiedTransfers[sti].isSplitFromMultipleTransfers =
+      (debtorTransferCount[simplifiedTransfers[sti].fromMemberId] || 0) > 1;
   }
 
   return {
@@ -1398,7 +1427,9 @@ function computeDebtsData() {
       simplifiedTransfers: simplifiedTransfers,
       unpaidAttendances: drinkingUnpaidAttendances,
       recentSettlements: recentDrinkingSettlements.slice(0, 20),
-      totalOutstanding: totalDrinkingOutstanding
+      unreconciledSettlements: unreconciledDrinkingSettlements,
+      totalOutstanding: totalDrinkingOutstanding,
+      imbalanceAmount: imbalanceAmount
     }
   };
 }
@@ -1695,6 +1726,8 @@ function getMonthlyBillData(monthStr) {
     suggestedEstimate += Math.round(sd.courts * durationHours_(sd.start_time, sd.end_time) * settings.court_price_per_hour);
   }
 
+  var issuedAtRef = billRow && billRow.updated_at ? String(billRow.updated_at).trim().slice(0, 10) : (targetMonth + '-01');
+
   // Đọc Monthly_Dues của tháng
   var allDues = getSheetObjects_('Monthly_Dues');
   var dues = [];
@@ -1717,6 +1750,7 @@ function getMonthlyBillData(monthStr) {
       base_amount: toInt_(d.base_amount, dAmt),
       credit_amount: toInt_(d.credit_amount, 0),
       credit_note: String(d.credit_note || '').trim(),
+      issued_at: issuedAtRef,
       is_paid: toBoolean_(d.is_paid),
       paid_at: String(d.paid_at || ''),
       transferContent: dContent,
@@ -1735,6 +1769,12 @@ function getMonthlyBillData(monthStr) {
     ? actualCostOverride
     : (isProjectedCost ? estimate : sessionsTotal);
   var parsedBillDetail = billRow ? parseJsonSafe_(String(billRow.bill_detail || ''), {}) : {};
+  var refundCredits = (parsedBillDetail && Array.isArray(parsedBillDetail.refundCredits))
+    ? parsedBillDetail.refundCredits
+    : [];
+  var refundCreditsTotal = (parsedBillDetail && parsedBillDetail.refundCreditsTotal !== undefined)
+    ? Math.max(0, toInt_(parsedBillDetail.refundCreditsTotal, 0))
+    : refundCredits.reduce(function (sum, r) { return sum + toInt_(r && r.amount, 0); }, 0);
   var hasCarryOutOverride = parsedBillDetail &&
     parsedBillDetail.carryOutOverride !== undefined &&
     parsedBillDetail.carryOutOverride !== null &&
@@ -1742,7 +1782,7 @@ function getMonthlyBillData(monthStr) {
     isFinite(Number(parsedBillDetail.carryOutOverride));
   var carryOut = hasCarryOutOverride
     ? Math.round(Number(parsedBillDetail.carryOutOverride))
-    : (carryIn + billedTotal + guestPaidAmount - actualCost);
+    : (carryIn + billedTotal + guestPaidAmount - actualCost - refundCreditsTotal);
 
   var contributions = normalizeContributionsList_(
     billRow ? parseJsonSafe_(String(billRow.shuttle_contributions || ''), []) : [],
@@ -1784,6 +1824,7 @@ function getMonthlyBillData(monthStr) {
     bill_detail: billRow ? String(billRow.bill_detail || '') : '',
     shuttle_contributions: billRow ? String(billRow.shuttle_contributions || '') : '',
     applied_credits_total: billRow ? toInt_(billRow.applied_credits_total, 0) : 0,
+    refund_credits_total: refundCreditsTotal,
     carry_over_credits: billRow ? String(billRow.carry_over_credits || '') : ''
   };
 
@@ -1819,7 +1860,8 @@ function getMonthlyBillData(monthStr) {
     suggestedEstimateFromSchedule: suggestedEstimate,
     suggestedPrevOvertime: suggestedPrevOvertime,
     contributions: contributions,
-    prevMonthContributions: prevMonthContributions
+    prevMonthContributions: prevMonthContributions,
+    refundCredits: refundCredits
   };
 }
 
@@ -1890,6 +1932,11 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     ? toInt_(p.carryIn, currentData.bill.carry_in)
     : currentData.bill.carry_in;
 
+  var memberIdSet = {};
+  for (var msi = 0; msi < memberIds.length; msi++) {
+    memberIdSet[String(memberIds[msi]).trim()] = true;
+  }
+
   var appliedCredits = normalizeContributionsList_(
     p.appliedCredits !== undefined ? p.appliedCredits : currentData.prevMonthContributions,
     membersMap
@@ -1897,6 +1944,8 @@ function issueMonthlyBillRecord(payload, editorEmail) {
   var appliedCreditsTotal = 0;
   var creditByMember = {};
   var creditNotesByMember = {};
+  var refundByMember = {};
+  var refundOrder = [];
   for (var ci = 0; ci < appliedCredits.length; ci++) {
     var cr = appliedCredits[ci];
     appliedCreditsTotal += cr.amount;
@@ -1904,6 +1953,37 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     var labelPart = (cr.tube_qty > 0 ? cr.tube_qty + ' ống' : 'góp cầu') + ' (' + cr.amount.toLocaleString('vi-VN') + 'đ)';
     if (!creditNotesByMember[cr.member_id]) creditNotesByMember[cr.member_id] = [];
     creditNotesByMember[cr.member_id].push(cr.note ? cr.note + ' - ' + labelPart : labelPart);
+
+    if (!memberIdSet[cr.member_id]) {
+      if (!refundByMember[cr.member_id]) {
+        refundByMember[cr.member_id] = {
+          name: membersMap[cr.member_id] ? membersMap[cr.member_id].name : (cr.member_name || cr.member_id),
+          amount: 0,
+          notes: []
+        };
+        refundOrder.push(cr.member_id);
+      }
+      refundByMember[cr.member_id].amount += cr.amount;
+      refundByMember[cr.member_id].notes.push(cr.note ? cr.note + ' - ' + labelPart : labelPart);
+    }
+  }
+
+  var refundCredits = [];
+  var refundCreditsTotal = 0;
+  for (var ri = 0; ri < refundOrder.length; ri++) {
+    var rmId = refundOrder[ri];
+    var rInfo = refundByMember[rmId];
+    refundCreditsTotal += rInfo.amount;
+    refundCredits.push({
+      id: 'REFUND_' + rmId,
+      member_id: rmId,
+      member_name: rInfo.name,
+      tube_qty: 0,
+      unit_price: 0,
+      amount: rInfo.amount,
+      note: 'Thủ quỹ hoàn riêng (không đánh MAIN): ' + rInfo.notes.join(', '),
+      created_at: now
+    });
   }
 
   var grossToDistribute = Math.max(0, estimate + appliedCreditsTotal - carryIn);
@@ -1912,7 +1992,7 @@ function issueMonthlyBillRecord(payload, editorEmail) {
     : 0;
   var toCollect = Math.max(0, estimate - carryIn);
 
-  // Giữ trạng thái is_paid của thành viên đã đóng trước đó nếu phát hành lại hóa đơn tháng
+  // Giữ trạng thái is_paid chỉ khi số tiền mới khớp đúng số tiền đã đóng trước đó
   var oldPaidMap = {};
   var oldDues = getSheetObjects_('Monthly_Dues');
   for (var i = 0; i < oldDues.length; i++) {
@@ -1950,6 +2030,16 @@ function issueMonthlyBillRecord(payload, editorEmail) {
         });
       }
     }
+    var oldPaidAmt = oldPaid ? toInt_(oldPaid.amount, 0) : 0;
+    var isExactMatch = Boolean(oldPaid && (oldPaidAmt === netDue || netDue === 0));
+    var isDuePaid = isExactMatch || netDue === 0;
+    if (oldPaid && !isExactMatch) {
+      var diff = netDue - oldPaidAmt;
+      var diffNote = diff > 0
+        ? ('Đã đóng trước ' + oldPaidAmt.toLocaleString('vi-VN') + 'đ — thiếu thêm ' + diff.toLocaleString('vi-VN') + 'đ')
+        : ('Đã đóng trước ' + oldPaidAmt.toLocaleString('vi-VN') + 'đ — dư ' + (-diff).toLocaleString('vi-VN') + 'đ cần hoàn');
+      creditNoteStr = creditNoteStr ? (creditNoteStr + ' • ' + diffNote) : diffNote;
+    }
     billedTotal += netDue;
 
     duesToAppend.push({
@@ -1960,16 +2050,18 @@ function issueMonthlyBillRecord(payload, editorEmail) {
       base_amount: perMember,
       credit_amount: creditAmt,
       credit_note: creditNoteStr,
-      is_paid: oldPaid ? true : (netDue === 0),
-      paid_at: oldPaid ? String(oldPaid.paid_at || now) : (netDue === 0 ? now : ''),
-      confirmed_by: oldPaid ? String(oldPaid.confirmed_by || editorEmail) : (netDue === 0 ? editorEmail : '')
+      is_paid: isDuePaid,
+      paid_at: isExactMatch ? String(oldPaid.paid_at || now) : (netDue === 0 ? now : ''),
+      confirmed_by: isExactMatch ? String(oldPaid.confirmed_by || editorEmail) : (netDue === 0 ? editorEmail : '')
     });
   }
   appendObjects_('Monthly_Dues', duesToAppend);
 
-  var carryOut = carryIn + billedTotal + currentData.bill.guest_income - currentData.bill.actual_cost;
+  var carryOut = carryIn + billedTotal + currentData.bill.guest_income - currentData.bill.actual_cost - refundCreditsTotal;
   var billDetailObj = (p.billDetail && typeof p.billDetail === 'object') ? p.billDetail : {};
   billDetailObj.appliedCredits = appliedCredits;
+  billDetailObj.refundCredits = refundCredits;
+  billDetailObj.refundCreditsTotal = refundCreditsTotal;
   var billDetailStr = JSON.stringify(billDetailObj);
   var carryOverCreditsStr = JSON.stringify(carryOverCredits);
 
@@ -2167,7 +2259,7 @@ function closeMonthRecord(payload, editorEmail) {
     : (overrideVal !== null ? overrideVal : current.bill.actual_cost);
   var carryOut = hasCarryOutOverride
     ? Math.round(Number(p.carryOutOverride))
-    : (current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost);
+    : (current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost - (current.bill.refund_credits_total || 0));
   var now = nowIso_();
 
   var existingRows = getSheetObjects_('Monthly_Bills').filter(function (b) {
@@ -2262,6 +2354,34 @@ function getDashboardData(periodType, refDate) {
     }
   }
 
+  var monthlyBillCostInPeriod = 0;
+  if (String(periodType || 'MONTH').trim().toUpperCase() !== 'WEEK') {
+    var startMonth = period.startDate ? period.startDate.slice(0, 7) : '';
+    var endMonth = period.endDate ? period.endDate.slice(0, 7) : '9999-12';
+    var billRowsPeriod = getSheetObjects_('Monthly_Bills');
+    var dueRowsPeriod = getSheetObjects_('Monthly_Dues');
+    var monthMap = {};
+    for (var mbi = 0; mbi < billRowsPeriod.length; mbi++) {
+      var bm = String(billRowsPeriod[mbi].month || '').trim();
+      if (bm) monthMap[bm] = true;
+    }
+    for (var mdi = 0; mdi < dueRowsPeriod.length; mdi++) {
+      var dm = String(dueRowsPeriod[mdi].month || '').trim();
+      if (dm) monthMap[dm] = true;
+    }
+    var monthKeys = Object.keys(monthMap);
+    for (var mki = 0; mki < monthKeys.length; mki++) {
+      var mKey = monthKeys[mki];
+      if (startMonth && mKey < startMonth) continue;
+      if (mKey > endMonth) continue;
+      var mbPeriod = getMonthlyBillData(mKey);
+      var isIssuedOrClosed = mbPeriod.bill.status === 'CLOSED' || mbPeriod.bill.billed_total > 0 || mbPeriod.dues.length > 0;
+      if (isIssuedOrClosed) {
+        monthlyBillCostInPeriod += Number(mbPeriod.bill.actual_cost) || 0;
+      }
+    }
+  }
+
   var paidMembersCount = 0;
   for (var di = 0; di < monthlyBill.dues.length; di++) {
     if (monthlyBill.dues[di].is_paid) paidMembersCount++;
@@ -2271,7 +2391,8 @@ function getDashboardData(periodType, refDate) {
     period: period,
     currentMonth: currentMonth,
     badminton: {
-      periodCost: badPeriodCost,
+      periodCost: badPeriodCost + monthlyBillCostInPeriod,
+      monthlyBillCostInPeriod: monthlyBillCostInPeriod,
       sessionCount: badSessionCount,
       fixedSessionCount: fixedSessionCount,
       adhocSessionCount: adhocSessionCount,
@@ -2307,6 +2428,10 @@ function getAllData(periodType, refDate, monthStr) {
     var members = getMembersList(false);
     var allSessions = getSessionsList({});
     var debts = computeDebtsData();
+    var closedMonths = getSheetObjects_('Monthly_Bills')
+      .filter(function (b) { return String(b.status || '').trim().toUpperCase() === 'CLOSED'; })
+      .map(function (b) { return String(b.month || '').trim(); })
+      .filter(Boolean);
 
     // Giới hạn danh sách buổi trong 6 tháng gần nhất + buổi còn nợ chưa thu để giữ payload < 95KB CacheService
     var refParts = rDate.split('-');
@@ -2331,7 +2456,8 @@ function getAllData(periodType, refDate, monthStr) {
     return {
       bootstrap: {
         settings: settings,
-        members: members
+        members: members,
+        closedMonths: closedMonths
       },
       dashboard: getDashboardData(periodType || 'MONTH', rDate),
       sessions: recentSessions,
@@ -2732,11 +2858,16 @@ function updateSessionRecord(payload, editorEmail) {
   }
   if (!oldSession) throw createAppError_('NOT_FOUND', 'Không tìm thấy buổi ' + sessionId);
 
-  // Bảo vệ nếu đã có Settlement gắn vào buổi
-  var currentAtts = getSheetObjects_('Attendance');
-  for (var ca = 0; ca < currentAtts.length; ca++) {
-    if (String(currentAtts[ca].session_id || '').trim() === sessionId && String(currentAtts[ca].settlement_id || '').trim()) {
-      throw createAppError_('BAD_REQUEST', 'Buổi đã có khoản thanh toán đối soát, không thể sửa danh sách chia tiền.');
+  // Bảo vệ nếu đã có Settlement gắn vào buổi: chỉ cho phép sửa thông tin mô tả / ảnh biên lai
+  var allAttRows = getSheetObjects_('Attendance');
+  var oldSessionAtts = [];
+  var hasSettledAtt = false;
+  for (var ca = 0; ca < allAttRows.length; ca++) {
+    if (String(allAttRows[ca].session_id || '').trim() === sessionId) {
+      oldSessionAtts.push(allAttRows[ca]);
+      if (String(allAttRows[ca].settlement_id || '').trim()) {
+        hasSettledAtt = true;
+      }
     }
   }
 
@@ -2748,6 +2879,114 @@ function updateSessionRecord(payload, editorEmail) {
   var guestFee = Math.max(0, toInt_(p.guestFee !== undefined ? p.guestFee : p.guest_fee, oldSession.guest_fee || settings.guest_fee));
   var treasurerId = settings.treasurer_member_id;
   var payerId = String(p.payerId || p.payer_id || oldSession.payer_id || treasurerId).trim();
+  var billingMode = sessionType === 'BADMINTON'
+    ? (String(p.billingMode || p.billing_mode || oldSession.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
+    : '';
+  var venueType = sessionType === 'DRINKING' ? String(p.venueType || p.venue_type || oldSession.venue_type || 'RESTAURANT').trim().toUpperCase() : '';
+
+  if (hasSettledAtt) {
+    var oldAttIdSet = {};
+    var oldAttIdList = [];
+    for (var oa = 0; oa < oldSessionAtts.length; oa++) {
+      var oMid = String(oldSessionAtts[oa].member_id || '').trim();
+      if (oMid && !oldAttIdSet[oMid]) {
+        oldAttIdSet[oMid] = true;
+        oldAttIdList.push(oMid);
+      }
+    }
+    oldAttIdList.sort();
+
+    var rawCheckIds = Array.isArray(p.attendeeIds) ? p.attendeeIds : (Array.isArray(p.attendee_ids) ? p.attendee_ids : []);
+    var newAttIdSet = {};
+    var newAttIdList = [];
+    for (var na = 0; na < rawCheckIds.length; na++) {
+      var nMid = String(rawCheckIds[na] || '').trim();
+      if (nMid && !newAttIdSet[nMid]) {
+        newAttIdSet[nMid] = true;
+        newAttIdList.push(nMid);
+      }
+    }
+    newAttIdList.sort();
+
+    var sameAtts = oldAttIdList.length === newAttIdList.length;
+    if (sameAtts) {
+      for (var ci = 0; ci < oldAttIdList.length; ci++) {
+        if (oldAttIdList[ci] !== newAttIdList[ci]) {
+          sameAtts = false;
+          break;
+        }
+      }
+    }
+
+    var reqNewGuests = Array.isArray(p.new_guests) ? p.new_guests : (Array.isArray(p.quickNewGuests) ? p.quickNewGuests : []);
+    var nextTotalCheck = (p.totalAmount !== undefined || p.total_amount !== undefined)
+      ? Math.max(0, toInt_(p.totalAmount !== undefined ? p.totalAmount : p.total_amount, oldSession.total_amount))
+      : oldSession.total_amount;
+    var sameModeCheck = sessionType !== 'BADMINTON' || (billingMode === (oldSession.billing_mode || 'MONTHLY'));
+    var samePayerCheck = sessionType === 'DRINKING' || billingMode !== 'AD_HOC' || (payerId === (oldSession.payer_id || treasurerId || ''));
+    var sameGuestFeeCheck = sessionType !== 'BADMINTON' || billingMode !== 'MONTHLY' || (guestFee === (oldSession.guest_fee || settings.guest_fee));
+
+    var sameDrinkingItems = true;
+    if (sessionType === 'DRINKING' && Array.isArray(p.items)) {
+      var oldSessionItems = getSheetObjects_('Session_Items').filter(function (it) {
+        return String(it.session_id || '').trim() === sessionId && toInt_(it.amount, 0) > 0 && String(it.member_id || '').trim() !== '';
+      });
+      var normOld = oldSessionItems.map(function (it) {
+        return String(it.member_id).trim() + '|' + String(it.kind || 'ITEM').trim().toUpperCase() + '|' + toInt_(it.amount, 0) + '|' + String(it.item_name || '').trim();
+      }).sort();
+      var normNew = p.items.filter(function (it) {
+        return toInt_(it.amount, 0) > 0 && String(it.member_id || '').trim() !== '';
+      }).map(function (it) {
+        return String(it.member_id).trim() + '|' + (String(it.kind || 'ITEM').trim().toUpperCase() === 'BILL' ? 'BILL' : 'ITEM') + '|' + toInt_(it.amount, 0) + '|' + String(it.item_name || '').trim();
+      }).sort();
+      sameDrinkingItems = normOld.length === normNew.length;
+      if (sameDrinkingItems) {
+        for (var sii = 0; sii < normOld.length; sii++) {
+          if (normOld[sii] !== normNew[sii]) {
+            sameDrinkingItems = false;
+            break;
+          }
+        }
+      }
+    }
+
+    var financialUnchanged = (
+      sessionType === oldSession.type &&
+      dateStr === oldSession.date &&
+      sameModeCheck &&
+      nextTotalCheck === oldSession.total_amount &&
+      sameGuestFeeCheck &&
+      samePayerCheck &&
+      sameAtts &&
+      reqNewGuests.length === 0 &&
+      sameDrinkingItems
+    );
+
+    if (!financialUnchanged) {
+      throw createAppError_('BAD_REQUEST', 'Buổi đã có khoản thanh toán đối soát, chỉ được sửa Tiêu đề, Ghi chú hoặc Ảnh hóa đơn (không sửa được số tiền / người tham gia).');
+    }
+
+    var metaUpdatedSession = null;
+    updateRowsByCondition_(
+      'Sessions',
+      function (row) { return String(row.session_id || '').trim() === sessionId; },
+      function (row) {
+        row.title = title;
+        row.receipt_drive_id = p.receiptDriveId !== undefined ? String(p.receiptDriveId) : row.receipt_drive_id;
+        row.receipt_url = p.receiptUrl !== undefined ? String(p.receiptUrl) : row.receipt_url;
+        row.receipt_summary = p.receiptSummary !== undefined ? String(p.receiptSummary) : row.receipt_summary;
+        row.note = p.note !== undefined ? String(p.note) : row.note;
+        if (sessionType === 'DRINKING') row.venue_type = venueType;
+        row.updated_at = now;
+        metaUpdatedSession = row;
+        return row;
+      }
+    );
+    var oldSessItemsRet = getSheetObjects_('Session_Items').filter(function (it) {
+      return String(it.session_id || '').trim() === sessionId;
+    });
+    return { session: metaUpdatedSession, attendances: oldSessionAtts, items: oldSessItemsRet };
+  }
 
   var guestRes = resolveQuickNewGuests_(
     Array.isArray(p.new_guests) ? p.new_guests : (Array.isArray(p.quickNewGuests) ? p.quickNewGuests : []),
@@ -2778,10 +3017,6 @@ function updateSessionRecord(payload, editorEmail) {
   var shuttleAmount = Math.max(0, toInt_(p.shuttleAmount !== undefined ? p.shuttleAmount : p.shuttle_amount, oldSession.shuttle_amount));
   var otherAmount = Math.max(0, toInt_(p.otherAmount !== undefined ? p.otherAmount : p.other_amount, oldSession.other_amount));
   var costDetailStr = p.costDetail ? JSON.stringify(p.costDetail) : (p.cost_detail !== undefined ? String(p.cost_detail) : oldSession.cost_detail);
-  var billingMode = sessionType === 'BADMINTON'
-    ? (String(p.billingMode || p.billing_mode || oldSession.billing_mode || 'MONTHLY').trim().toUpperCase() === 'AD_HOC' ? 'AD_HOC' : 'MONTHLY')
-    : '';
-  var venueType = sessionType === 'DRINKING' ? String(p.venueType || p.venue_type || oldSession.venue_type || 'RESTAURANT').trim().toUpperCase() : '';
   var unit = settings.rounding_unit || 1000;
 
   if (sessionType === 'BADMINTON') {
@@ -3007,55 +3242,122 @@ function confirmPaymentRecord(payload, editorEmail) {
   }
 
   // --- CATEGORY = DRINKING ---
+  function encodeReconciledIds_(ids) {
+    var seenIds = {};
+    var uniqueIds = [];
+    for (var ei = 0; ei < ids.length; ei++) {
+      var val = String(ids[ei] || '').trim();
+      if (val && !seenIds[val]) {
+        seenIds[val] = true;
+        uniqueIds.push(val);
+      }
+    }
+    return uniqueIds.length > 0 ? ('REC:' + uniqueIds.join(',')) : '';
+  }
+
+  function parseReconciledIds_(raw) {
+    var txt = String(raw || '').trim();
+    if (txt.indexOf('REC:') !== 0) return [];
+    return txt.slice(4).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  function applyDrinkingItemsPaymentToRows_(rows, sId, srcSet, prefToMemberId, stId, paidAtStr) {
+    var reduction = 0;
+    var nextRows = [];
+    for (var ri = 0; ri < rows.length; ri++) {
+      var r = rows[ri];
+      var clone = {};
+      for (var k in r) {
+        if (Object.prototype.hasOwnProperty.call(r, k)) clone[k] = r[k];
+      }
+      var rAttId = String(clone.attendance_id || '').trim();
+      if (String(clone.session_id || '').trim() === sId && srcSet[rAttId] && !toBoolean_(clone.is_paid)) {
+        var rAmt = Math.abs(toInt_(clone.net_amount, 0) || toInt_(clone.fee_amount, 0));
+        reduction += rAmt;
+        clone.net_amount = 0;
+        clone.is_paid = true;
+        clone.paid_at = paidAtStr;
+        clone.settlement_id = stId;
+      }
+      nextRows.push(clone);
+    }
+    if (reduction <= 0) return nextRows;
+
+    var creditorEntries = [];
+    for (var ci = 0; ci < nextRows.length; ci++) {
+      var cr = nextRows[ci];
+      if (String(cr.session_id || '').trim() === sId && !toBoolean_(cr.is_paid) && toInt_(cr.net_amount, 0) < 0) {
+        creditorEntries.push({ idx: ci, row: cr });
+      }
+    }
+    creditorEntries.sort(function (x, y) {
+      var xPref = String(x.row.member_id || '').trim() === prefToMemberId ? 0 : 1;
+      var yPref = String(y.row.member_id || '').trim() === prefToMemberId ? 0 : 1;
+      if (xPref !== yPref) return xPref - yPref;
+      return toInt_(x.row.net_amount, 0) - toInt_(y.row.net_amount, 0);
+    });
+
+    var rem = reduction;
+    for (var cei = 0; cei < creditorEntries.length; cei++) {
+      if (rem <= 0) break;
+      var cIdx = creditorEntries[cei].idx;
+      var cRow = nextRows[cIdx];
+      var cNet = toInt_(cRow.net_amount, 0);
+      var canAbsorb = Math.abs(cNet);
+      var applyAmt = Math.min(rem, canAbsorb);
+      var nextNet = Math.round(cNet + applyAmt);
+      var isClosed = nextNet >= 0;
+      cRow.net_amount = isClosed ? 0 : nextNet;
+      cRow.is_paid = isClosed;
+      if (isClosed) {
+        cRow.paid_at = paidAtStr;
+        cRow.settlement_id = stId;
+      }
+      rem -= applyAmt;
+    }
+    return nextRows;
+  }
+
   if (mode === 'ITEMS') {
     var dAttIds = Array.isArray(p.attendanceIds || p.attendance_ids) ? (p.attendanceIds || p.attendance_ids) : [];
     var dSet = {};
     for (var i = 0; i < dAttIds.length; i++) dSet[String(dAttIds[i]).trim()] = true;
     var totalPaid = 0;
-    var sessionReductions = {};
-
-    updateRowsByCondition_(
-      'Attendance',
-      function (row) {
-        return String(row.session_type || '').toUpperCase() === 'DRINKING' &&
-          dSet[String(row.attendance_id || '').trim()] &&
-          !toBoolean_(row.is_paid);
-      },
-      function (row) {
-        var amt = Math.abs(toInt_(row.net_amount, 0) || toInt_(row.fee_amount, 0));
-        totalPaid += amt;
-        var sid = String(row.session_id || '').trim();
-        sessionReductions[sid] = (sessionReductions[sid] || 0) + amt;
-        row.net_amount = 0;
-        row.is_paid = true;
-        row.paid_at = now;
-        row.settlement_id = settlementId;
-        return row;
+    var affectedSidsMap = {};
+    var allAttForItems = getSheetObjects_('Attendance');
+    for (var ai = 0; ai < allAttForItems.length; ai++) {
+      var rowIt = allAttForItems[ai];
+      var attIdIt = String(rowIt.attendance_id || '').trim();
+      if (String(rowIt.session_type || '').toUpperCase() === 'DRINKING' && dSet[attIdIt] && !toBoolean_(rowIt.is_paid)) {
+        totalPaid += Math.abs(toInt_(rowIt.net_amount, 0) || toInt_(rowIt.fee_amount, 0));
+        var sidIt = String(rowIt.session_id || '').trim();
+        if (sidIt) affectedSidsMap[sidIt] = true;
       }
-    );
+    }
 
-    // Giảm net_amount âm của chủ nợ tương ứng trong buổi nhậu để giữ tổng bằng 0
+    var updatedAttById = {};
+    var affectedSidKeys = Object.keys(affectedSidsMap);
+    for (var ski = 0; ski < affectedSidKeys.length; ski++) {
+      var targetSid = affectedSidKeys[ski];
+      var sessRows = allAttForItems.filter(function (a) {
+        return String(a.session_id || '').trim() === targetSid && String(a.session_type || '').toUpperCase() === 'DRINKING';
+      });
+      var nextSessRows = applyDrinkingItemsPaymentToRows_(sessRows, targetSid, dSet, toMemberId, settlementId, now);
+      for (var nri = 0; nri < nextSessRows.length; nri++) {
+        updatedAttById[String(nextSessRows[nri].attendance_id || '').trim()] = nextSessRows[nri];
+      }
+    }
+
     updateRowsByCondition_(
       'Attendance',
+      function (row) { return Boolean(updatedAttById[String(row.attendance_id || '').trim()]); },
       function (row) {
-        var sid = String(row.session_id || '').trim();
-        return String(row.session_type || '').toUpperCase() === 'DRINKING' &&
-          !toBoolean_(row.is_paid) &&
-          toInt_(row.net_amount, 0) < 0 &&
-          sessionReductions[sid] > 0 &&
-          String(row.member_id || '').trim() === toMemberId;
-      },
-      function (row) {
-        var sid = String(row.session_id || '').trim();
-        var red = sessionReductions[sid] || 0;
-        var nextNet = toInt_(row.net_amount, 0) + red;
-        row.net_amount = nextNet;
-        if (nextNet >= 0) {
-          row.net_amount = 0;
-          row.is_paid = true;
-          row.paid_at = now;
-          row.settlement_id = settlementId;
-        }
+        var upd = updatedAttById[String(row.attendance_id || '').trim()];
+        if (!upd) return row;
+        row.net_amount = upd.net_amount;
+        row.is_paid = upd.is_paid;
+        row.paid_at = upd.paid_at;
+        row.settlement_id = upd.settlement_id;
         return row;
       }
     );
@@ -3102,6 +3404,18 @@ function confirmPaymentRecord(payload, editorEmail) {
 
   var debtsAfter = computeDebtsData();
   if (debtsAfter.drinking.simplifiedTransfers.length === 0) {
+    var allStsAfter = getSheetObjects_('Settlements');
+    var batchIds = [];
+    for (var bi = 0; bi < allStsAfter.length; bi++) {
+      var bRow = allStsAfter[bi];
+      if (String(bRow.category || 'DRINKING').toUpperCase() === 'DRINKING' && !toBoolean_(bRow.is_reconciled)) {
+        batchIds.push(String(bRow.settlement_id || '').trim());
+      }
+    }
+    var encodedBatch = encodeReconciledIds_(batchIds);
+    stSimp.is_reconciled = true;
+    stSimp.source_ledger_ids = encodedBatch;
+
     updateRowsByCondition_(
       'Attendance',
       function (row) { return String(row.session_type || '').toUpperCase() === 'DRINKING' && !toBoolean_(row.is_paid); },
@@ -3117,6 +3431,9 @@ function confirmPaymentRecord(payload, editorEmail) {
       function (row) { return String(row.category || 'DRINKING').toUpperCase() === 'DRINKING' && !toBoolean_(row.is_reconciled); },
       function (row) {
         row.is_reconciled = true;
+        if (String(row.settlement_id || '').trim() === settlementId) {
+          row.source_ledger_ids = encodedBatch;
+        }
         return row;
       }
     );
@@ -3146,6 +3463,69 @@ function undoSettlementRecord(payload) {
   }
   if (!target) throw createAppError_('NOT_FOUND', 'Không tìm thấy giao dịch thanh toán ' + settlementId);
 
+  function parseRecIds_(raw) {
+    var txt = String(raw || '').trim();
+    if (txt.indexOf('REC:') !== 0) return [];
+    return txt.slice(4).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  function applyItemsReplay_(rows, sId, srcSet, prefToMemberId, stId, paidAtStr) {
+    var reduction = 0;
+    var nextRows = [];
+    for (var ri = 0; ri < rows.length; ri++) {
+      var r = rows[ri];
+      var clone = {};
+      for (var k in r) {
+        if (Object.prototype.hasOwnProperty.call(r, k)) clone[k] = r[k];
+      }
+      var rAttId = String(clone.attendance_id || '').trim();
+      if (String(clone.session_id || '').trim() === sId && srcSet[rAttId] && !toBoolean_(clone.is_paid)) {
+        var rAmt = Math.abs(toInt_(clone.net_amount, 0) || toInt_(clone.fee_amount, 0));
+        reduction += rAmt;
+        clone.net_amount = 0;
+        clone.is_paid = true;
+        clone.paid_at = paidAtStr;
+        clone.settlement_id = stId;
+      }
+      nextRows.push(clone);
+    }
+    if (reduction <= 0) return nextRows;
+
+    var creditorEntries = [];
+    for (var ci = 0; ci < nextRows.length; ci++) {
+      var cr = nextRows[ci];
+      if (String(cr.session_id || '').trim() === sId && !toBoolean_(cr.is_paid) && toInt_(cr.net_amount, 0) < 0) {
+        creditorEntries.push({ idx: ci, row: cr });
+      }
+    }
+    creditorEntries.sort(function (x, y) {
+      var xPref = String(x.row.member_id || '').trim() === prefToMemberId ? 0 : 1;
+      var yPref = String(y.row.member_id || '').trim() === prefToMemberId ? 0 : 1;
+      if (xPref !== yPref) return xPref - yPref;
+      return toInt_(x.row.net_amount, 0) - toInt_(y.row.net_amount, 0);
+    });
+
+    var rem = reduction;
+    for (var cei = 0; cei < creditorEntries.length; cei++) {
+      if (rem <= 0) break;
+      var cIdx = creditorEntries[cei].idx;
+      var cRow = nextRows[cIdx];
+      var cNet = toInt_(cRow.net_amount, 0);
+      var canAbsorb = Math.abs(cNet);
+      var applyAmt = Math.min(rem, canAbsorb);
+      var nextNet = Math.round(cNet + applyAmt);
+      var isClosed = nextNet >= 0;
+      cRow.net_amount = isClosed ? 0 : nextNet;
+      cRow.is_paid = isClosed;
+      if (isClosed) {
+        cRow.paid_at = paidAtStr;
+        cRow.settlement_id = stId;
+      }
+      rem -= applyAmt;
+    }
+    return nextRows;
+  }
+
   var category = String(target.category || 'DRINKING').trim().toUpperCase();
   var sourceIds = String(target.source_attendance_ids || '')
     .split(',')
@@ -3154,29 +3534,94 @@ function undoSettlementRecord(payload) {
   var sourceSet = {};
   for (var s = 0; s < sourceIds.length; s++) sourceSet[sourceIds[s]] = true;
 
-  var affectedSessionSet = {};
-  updateRowsByCondition_(
-    'Attendance',
-    function (row) {
-      var attId = String(row.attendance_id || '').trim();
-      var sid = String(row.settlement_id || '').trim();
-      return sid === settlementId || Boolean(sourceSet[attId]);
-    },
-    function (row) {
-      var sessionId = String(row.session_id || '').trim();
-      if (sessionId) affectedSessionSet[sessionId] = true;
-      var fee = toInt_(row.fee_amount, 0);
-      var contrib = toInt_(row.contributed_amount, 0);
-      row.is_paid = false;
-      row.paid_at = '';
-      row.settlement_id = '';
-      row.net_amount = category === 'DRINKING' ? (fee - contrib) : fee;
-      return row;
-    }
-  );
+  if (category === 'BADMINTON') {
+    updateRowsByCondition_(
+      'Attendance',
+      function (row) {
+        var attId = String(row.attendance_id || '').trim();
+        var sid = String(row.settlement_id || '').trim();
+        return sid === settlementId || Boolean(sourceSet[attId]);
+      },
+      function (row) {
+        var fee = toInt_(row.fee_amount, 0);
+        row.is_paid = false;
+        row.paid_at = '';
+        row.settlement_id = '';
+        row.net_amount = fee;
+        return row;
+      }
+    );
+  } else if (sourceIds.length === 0) {
+    // DRINKING SIMPLIFIED_TRANSFER
+    if (toBoolean_(target.is_reconciled)) {
+      var ownBatchIds = parseRecIds_(target.source_ledger_ids);
+      var closingSt = ownBatchIds.length > 0 ? target : null;
+      if (!closingSt) {
+        for (var si = 0; si < settlements.length; si++) {
+          var cand = settlements[si];
+          var candIds = parseRecIds_(cand.source_ledger_ids);
+          if (candIds.indexOf(settlementId) >= 0) {
+            closingSt = cand;
+            break;
+          }
+        }
+      }
 
-  // Với Ăn nhậu: mở khóa lại các dòng Attendance (đặc biệt dòng chủ nợ) thuộc các buổi bị ảnh hưởng
-  if (category === 'DRINKING') {
+      if (closingSt) {
+        var closingId = String(closingSt.settlement_id || '').trim();
+        var batchIds = parseRecIds_(closingSt.source_ledger_ids);
+        var batchSet = {};
+        for (var bi = 0; bi < batchIds.length; bi++) {
+          if (batchIds[bi] !== settlementId) batchSet[batchIds[bi]] = true;
+        }
+        updateRowsByCondition_(
+          'Attendance',
+          function (row) { return String(row.settlement_id || '').trim() === closingId; },
+          function (row) {
+            row.is_paid = false;
+            row.paid_at = '';
+            row.settlement_id = '';
+            return row;
+          }
+        );
+        updateRowsByCondition_(
+          'Settlements',
+          function (row) { return Boolean(batchSet[String(row.settlement_id || '').trim()]); },
+          function (row) {
+            row.is_reconciled = false;
+            if (String(row.settlement_id || '').trim() === closingId) {
+              row.source_ledger_ids = '';
+            }
+            return row;
+          }
+        );
+      } else {
+        updateRowsByCondition_(
+          'Attendance',
+          function (row) { return String(row.settlement_id || '').trim() === settlementId; },
+          function (row) {
+            row.is_paid = false;
+            row.paid_at = '';
+            row.settlement_id = '';
+            return row;
+          }
+        );
+      }
+    }
+  } else {
+    // DRINKING ITEMS: tính lại gốc buổi bị ảnh hưởng và replay các giao dịch ITEMS còn lại
+    var allAttUndo = getSheetObjects_('Attendance');
+    var affectedSessionSet = {};
+    for (var ui = 0; ui < allAttUndo.length; ui++) {
+      var aRow = allAttUndo[ui];
+      var aAttId = String(aRow.attendance_id || '').trim();
+      var aSid = String(aRow.settlement_id || '').trim();
+      if (aSid === settlementId || Boolean(sourceSet[aAttId])) {
+        var sIdVal = String(aRow.session_id || '').trim();
+        if (sIdVal) affectedSessionSet[sIdVal] = true;
+      }
+    }
+
     var affectedSids = Object.keys(affectedSessionSet);
     if (affectedSids.length > 0) {
       var membersMap = buildMembersMap_(getMembersList(false));
@@ -3184,9 +3629,29 @@ function undoSettlementRecord(payload) {
       var allSessions = getSessionsList({});
       var settings = getSettingsMap();
       var unit = settings.rounding_unit || 1000;
+      var now = nowIso_();
 
-      for (var si = 0; si < affectedSids.length; si++) {
-        var sId = affectedSids[si];
+      var settlementMap = {};
+      var remainingItemSettlements = [];
+      for (var sti = 0; sti < settlements.length; sti++) {
+        var stRow = settlements[sti];
+        var stRowId = String(stRow.settlement_id || '').trim();
+        settlementMap[stRowId] = stRow;
+        if (
+          stRowId !== settlementId &&
+          String(stRow.category || 'DRINKING').trim().toUpperCase() === 'DRINKING' &&
+          String(stRow.source_attendance_ids || '').trim() !== ''
+        ) {
+          remainingItemSettlements.push(stRow);
+        }
+      }
+      remainingItemSettlements.sort(function (a, b) {
+        return String(a.settled_at || '').localeCompare(String(b.settled_at || ''));
+      });
+
+      var updatedUndoAttById = {};
+      for (var asi = 0; asi < affectedSids.length; asi++) {
+        var sId = affectedSids[asi];
         var sess = null;
         for (var k = 0; k < allSessions.length; k++) {
           if (allSessions[k].session_id === sId) {
@@ -3196,7 +3661,7 @@ function undoSettlementRecord(payload) {
         }
         if (!sess) continue;
 
-        var sessAtts = getSheetObjects_('Attendance').filter(function (a) {
+        var sessAtts = allAttUndo.filter(function (a) {
           return String(a.session_id || '').trim() === sId;
         });
         if (sessAtts.length === 0) continue;
@@ -3214,7 +3679,7 @@ function undoSettlementRecord(payload) {
           sess.total_amount,
           unit,
           membersMap,
-          nowIso_()
+          now
         );
 
         var netByMember = {};
@@ -3222,21 +3687,81 @@ function undoSettlementRecord(payload) {
           netByMember[recomputed.attendanceRows[ri].member_id] = recomputed.attendanceRows[ri];
         }
 
-        updateRowsByCondition_(
-          'Attendance',
-          function (row) { return String(row.session_id || '').trim() === sId; },
-          function (row) {
-            var mId = String(row.member_id || '').trim();
-            var rRow = netByMember[mId];
-            if (!rRow) return row;
-            row.net_amount = rRow.net_amount;
-            row.is_paid = rRow.net_amount === 0;
-            row.paid_at = rRow.net_amount === 0 ? (row.paid_at || nowIso_()) : '';
-            if (rRow.net_amount !== 0) row.settlement_id = '';
-            return row;
+        var workingRows = [];
+        for (var wi = 0; wi < sessAtts.length; wi++) {
+          var orig = sessAtts[wi];
+          var wClone = {};
+          for (var ok in orig) {
+            if (Object.prototype.hasOwnProperty.call(orig, ok)) wClone[ok] = orig[ok];
           }
-        );
+          var rRow = netByMember[String(orig.member_id || '').trim()];
+          if (rRow) {
+            var isZero = rRow.net_amount === 0;
+            wClone.net_amount = rRow.net_amount;
+            wClone.is_paid = isZero;
+            wClone.paid_at = isZero ? (orig.paid_at || now) : '';
+            wClone.settlement_id = '';
+          }
+          workingRows.push(wClone);
+        }
+
+        for (var rmi = 0; rmi < remainingItemSettlements.length; rmi++) {
+          var remSt = remainingItemSettlements[rmi];
+          var remIds = String(remSt.source_attendance_ids || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+          var remSet = {};
+          var hasMatch = false;
+          for (var rii = 0; rii < remIds.length; rii++) remSet[remIds[rii]] = true;
+          for (var wci = 0; wci < workingRows.length; wci++) {
+            if (remSet[String(workingRows[wci].attendance_id || '').trim()]) {
+              hasMatch = true;
+              break;
+            }
+          }
+          if (!hasMatch) continue;
+          workingRows = applyItemsReplay_(
+            workingRows,
+            sId,
+            remSet,
+            String(remSt.to_member_id || '').trim(),
+            String(remSt.settlement_id || '').trim(),
+            String(remSt.settled_at || now)
+          );
+        }
+
+        for (var fi = 0; fi < workingRows.length; fi++) {
+          var wFin = workingRows[fi];
+          var origFin = sessAtts[fi];
+          if (
+            origFin &&
+            !toBoolean_(wFin.is_paid) &&
+            toBoolean_(origFin.is_paid) &&
+            String(origFin.settlement_id || '').trim() &&
+            String(origFin.settlement_id || '').trim() !== settlementId
+          ) {
+            var origSt = settlementMap[String(origFin.settlement_id || '').trim()];
+            if (origSt && toBoolean_(origSt.is_reconciled) && !String(origSt.source_attendance_ids || '').trim()) {
+              wFin.is_paid = true;
+              wFin.paid_at = origFin.paid_at;
+              wFin.settlement_id = origFin.settlement_id;
+            }
+          }
+          updatedUndoAttById[String(wFin.attendance_id || '').trim()] = wFin;
+        }
       }
+
+      updateRowsByCondition_(
+        'Attendance',
+        function (row) { return Boolean(updatedUndoAttById[String(row.attendance_id || '').trim()]); },
+        function (row) {
+          var upd = updatedUndoAttById[String(row.attendance_id || '').trim()];
+          if (!upd) return row;
+          row.net_amount = upd.net_amount;
+          row.is_paid = upd.is_paid;
+          row.paid_at = upd.paid_at;
+          row.settlement_id = upd.settlement_id;
+          return row;
+        }
+      );
     }
   }
 

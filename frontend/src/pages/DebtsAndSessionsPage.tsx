@@ -152,6 +152,10 @@ export function DebtsAndSessionsPage({
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [lastMarkedMonthlyDue, setLastMarkedMonthlyDue] = useState<{
+    dueId: string;
+    memberName: string;
+  } | null>(null);
 
   const treasurer = useMemo(
     () =>
@@ -287,7 +291,24 @@ export function DebtsAndSessionsPage({
     try {
       await markDuePaid(idToken, { dueId, isPaid: true });
       await onRefreshAll();
+      setLastMarkedMonthlyDue({ dueId, memberName });
       toast.success(`Đã thu tiền cầu tháng của ${memberName}.`);
+    } catch (err) {
+      setActionError(handleApiError(err));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const handleUndoLastMonthlyDue = async () => {
+    if (!isEditor || !idToken || busyKey || !lastMarkedMonthlyDue) return;
+    setBusyKey(`undo-${lastMarkedMonthlyDue.dueId}`);
+    setActionError(null);
+    try {
+      await markDuePaid(idToken, { dueId: lastMarkedMonthlyDue.dueId, isPaid: false });
+      await onRefreshAll();
+      toast.success(`Đã hoàn tác thu tiền cầu tháng của ${lastMarkedMonthlyDue.memberName}.`);
+      setLastMarkedMonthlyDue(null);
     } catch (err) {
       setActionError(handleApiError(err));
     } finally {
@@ -620,6 +641,32 @@ export function DebtsAndSessionsPage({
               </div>
             </div>
 
+            {lastMarkedMonthlyDue && isEditor && (
+              <div className="mx-3 mt-3 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 flex items-center justify-between gap-2 text-xs text-emerald-900">
+                <span>
+                  Vừa xác nhận thu cầu tháng của <strong>{lastMarkedMonthlyDue.memberName}</strong>.
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleUndoLastMonthlyDue()}
+                    disabled={Boolean(busyKey)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-800 font-bold hover:bg-emerald-100 cursor-pointer disabled:opacity-60"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Hoàn tác</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLastMarkedMonthlyDue(null)}
+                    className="text-emerald-700 hover:underline font-semibold cursor-pointer"
+                  >
+                    Ẩn
+                  </button>
+                </div>
+              </div>
+            )}
+
             {allBadmintonRowsCount === 0 ? (
               <div className="p-6 text-center text-xs sm:text-sm text-slate-500">
                 {activeFilterCount > 0
@@ -916,6 +963,20 @@ export function DebtsAndSessionsPage({
               </div>
             </div>
 
+            {(simplifiedDrinkingDebts.imbalanceAmount ?? 0) !== 0 && (
+              <div className="mx-4 mt-3 rounded-xl bg-amber-50 border border-amber-300 px-3 py-2 text-[11px] text-amber-900 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  Lệch cân bằng nhậu{' '}
+                  <strong>
+                    {(simplifiedDrinkingDebts.imbalanceAmount ?? 0) > 0 ? '+' : ''}
+                    {formatVND(simplifiedDrinkingDebts.imbalanceAmount ?? 0)}
+                  </strong>{' '}
+                  (do gạch nợ từng phần hoặc làm tròn). Hãy kiểm tra lịch sử gạch nợ bên dưới nếu cần hoàn tác.
+                </span>
+              </div>
+            )}
+
             {visibleDrinkingTransfers.length === 0 ? (
               <div className="p-6 text-center text-xs sm:text-sm text-slate-500">
                 {activeFilterCount > 0
@@ -955,6 +1016,11 @@ export function DebtsAndSessionsPage({
                               {tr.toMember.name}
                             </span>
                             {oldestDate && <OverdueBadge fromDate={oldestDate} todayStr={todayStr} />}
+                            {tr.isSplitFromMultipleTransfers && (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                                Tổng nợ đã chia sang nhiều người nhận
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5 truncate">
                             Nội dung CK: <span className="font-mono">{tr.transferContent}</span>
@@ -1564,12 +1630,18 @@ export function DebtsAndSessionsPage({
                                         {isEditor && (
                                           <button
                                             type="button"
-                                            onClick={() =>
-                                              void handleMarkDrinkingAttPaid(
-                                                a,
-                                                s.payer_id || debts?.treasurerMemberId || ''
-                                              )
-                                            }
+                                            onClick={() => {
+                                              const creditors = detail.attendances
+                                                .filter((att) => (att.net_amount || 0) < 0)
+                                                .sort((x, y) => (x.net_amount || 0) - (y.net_amount || 0));
+                                              const preferredCreditor =
+                                                creditors.find((c) => c.member_id === s.payer_id)?.member_id ||
+                                                creditors[0]?.member_id ||
+                                                s.payer_id ||
+                                                debts?.treasurerMemberId ||
+                                                '';
+                                              void handleMarkDrinkingAttPaid(a, preferredCreditor);
+                                            }}
                                             disabled={Boolean(busyKey)}
                                             className="px-2 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold cursor-pointer"
                                           >

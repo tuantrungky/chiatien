@@ -48,5 +48,7 @@ describe('drinkingSplit', () => {
     expect(byId.get('B')?.netAmount).toBe(267000);
     expect(byId.get('C')?.netAmount).toBe(367000);
     expect(byId.get('A')?.netAmount).toBe(-634000);
+    expect(res.roundingAdjustment).toBe(-1000);
+    expect(res.roundingAdjustedMemberId).toBe('A');
   });
 });

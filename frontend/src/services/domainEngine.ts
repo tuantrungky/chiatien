@@ -420,9 +420,16 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
     parsedBillDetail.carryOutOverride !== undefined &&
     parsedBillDetail.carryOutOverride !== null &&
     Number.isFinite(Number(parsedBillDetail.carryOutOverride));
+  const refundCredits = Array.isArray(parsedBillDetail.refundCredits)
+    ? parsedBillDetail.refundCredits
+    : [];
+  const refundCreditsTotal =
+    parsedBillDetail.refundCreditsTotal !== undefined
+      ? Math.max(0, Math.round(Number(parsedBillDetail.refundCreditsTotal) || 0))
+      : refundCredits.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const carryOut = hasCarryOutOverride
     ? Math.round(Number(parsedBillDetail.carryOutOverride))
-    : carryIn + billedTotal + paidAmount - actualCost;
+    : carryIn + billedTotal + paidAmount - actualCost - refundCreditsTotal;
 
   const bill: MonthlyBill = {
     month: targetMonth,
@@ -450,6 +457,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
     bill_detail: billRow?.bill_detail ?? '',
     shuttle_contributions: billRow?.shuttle_contributions ?? '[]',
     applied_credits_total: billRow?.applied_credits_total ?? 0,
+    refund_credits_total: refundCreditsTotal,
     carry_over_credits: billRow?.carry_over_credits ?? '[]',
   };
 
@@ -465,6 +473,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
   });
 
   const qrByDueId = new Map(badmintonDues.monthlyDues.map((x) => [x.due_id, x]));
+  const issuedAtRef = billRow?.updated_at?.slice(0, 10) || `${targetMonth}-01`;
   const dues = duesRaw.map((d) => {
     const qr = qrByDueId.get(d.due_id);
     return {
@@ -476,6 +485,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
       base_amount: d.base_amount ?? d.amount,
       credit_amount: d.credit_amount ?? 0,
       credit_note: d.credit_note || '',
+      issued_at: issuedAtRef,
       is_paid: d.is_paid,
       paid_at: d.paid_at,
       transferContent: qr?.transferContent || '',
@@ -533,6 +543,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
       ...normalizeContributionsList(parseContributionsSafe(prevRow?.shuttle_contributions), membersMap),
       ...normalizeContributionsList(parseContributionsSafe(prevRow?.carry_over_credits), membersMap),
     ],
+    refundCredits,
   };
 }
 
@@ -617,6 +628,8 @@ export function buildDebtsData(dataset: ClubDataset): SeparatedDebtsData {
         .map(enrichSettlement)
         .sort((a, b) => b.settled_at.localeCompare(a.settled_at))
         .slice(0, 30),
+      unreconciledSettlements: unreconciledDrinking.map(enrichSettlement),
+      imbalanceAmount: simplified.imbalanceAmount ?? 0,
       totalOutstanding: simplified.totalOutstanding,
     },
   };
@@ -639,14 +652,24 @@ export function buildGuestStatsData(dataset: ClubDataset, monthStr?: string): Gu
   let totalFee = 0;
   let totalPaid = 0;
   let totalUnpaid = 0;
+  let collectedInMonthAmount = 0;
 
   for (const att of dataset.attendance) {
     if (
       att.member_type_snapshot !== 'GUEST' ||
       att.session_type !== 'BADMINTON' ||
-      adhocSessionIds.has(att.session_id) ||
-      att.session_date.slice(0, 7) !== targetMonth
+      adhocSessionIds.has(att.session_id)
     ) {
+      continue;
+    }
+
+    const fee = Number(att.fee_amount) || 0;
+    const paidRefMonth = att.is_paid && att.paid_at ? att.paid_at.slice(0, 7) : att.session_date.slice(0, 7);
+    if (att.is_paid && paidRefMonth === targetMonth) {
+      collectedInMonthAmount += fee;
+    }
+
+    if (att.session_date.slice(0, 7) !== targetMonth) {
       continue;
     }
 
@@ -665,7 +688,6 @@ export function buildGuestStatsData(dataset: ClubDataset, monthStr?: string): Gu
       byGuest.set(att.member_id, item);
     }
 
-    const fee = Number(att.fee_amount) || 0;
     item.sessionCount += 1;
     if (!item.dates.includes(att.session_date)) item.dates.push(att.session_date);
     item.totalFee += fee;
@@ -698,6 +720,7 @@ export function buildGuestStatsData(dataset: ClubDataset, monthStr?: string): Gu
       totalFee,
       totalPaid,
       totalUnpaid,
+      collectedInMonthAmount,
     },
     guests,
   };
@@ -736,6 +759,29 @@ export function buildDashboardData(
     }
   }
 
+  let monthlyBillCostInPeriod = 0;
+  if (periodType !== 'WEEK') {
+    const startMonth = period.startDate ? period.startDate.slice(0, 7) : '';
+    const endMonth = period.endDate ? period.endDate.slice(0, 7) : '9999-12';
+    const monthSet = new Set<string>();
+    for (const b of dataset.monthly_bills) {
+      if (b.month) monthSet.add(b.month);
+    }
+    for (const d of dataset.monthly_dues) {
+      if (d.month) monthSet.add(d.month);
+    }
+    for (const m of monthSet) {
+      if (startMonth && m < startMonth) continue;
+      if (m > endMonth) continue;
+      const mb = buildMonthlyBillData(dataset, m);
+      const isIssuedOrClosed =
+        mb.bill.status === 'CLOSED' || mb.bill.billed_total > 0 || mb.dues.length > 0;
+      if (isIssuedOrClosed) {
+        monthlyBillCostInPeriod += Number(mb.bill.actual_cost) || 0;
+      }
+    }
+  }
+
   const recentSessions = [...dataset.sessions]
     .sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))
     .slice(0, 5)
@@ -748,7 +794,8 @@ export function buildDashboardData(
     period,
     currentMonth,
     badminton: {
-      periodCost: badCost,
+      periodCost: badCost + monthlyBillCostInPeriod,
+      monthlyBillCostInPeriod,
       sessionCount: badCount,
       fixedSessionCount: fixedCount,
       adhocSessionCount: adhocCount,
@@ -830,6 +877,9 @@ export function buildAllData(
     bootstrap: {
       settings: { ...dataset.settings },
       members: [...dataset.members],
+      closedMonths: dataset.monthly_bills
+        .filter((b) => b.status === 'CLOSED')
+        .map((b) => b.month),
     },
     dashboard: buildDashboardData(dataset, periodType, rDate),
     sessions: recentSessions,
@@ -1200,14 +1250,8 @@ export function planUpdateSession(
   if (!oldSession) throw new ApiClientError('NOT_FOUND', `Không tìm thấy buổi ${sessionId}`, 404);
 
   const oldAttendances = dataset.attendance.filter((a) => a.session_id === sessionId);
-  if (oldAttendances.some((a) => Boolean(a.settlement_id))) {
-    throw new ApiClientError(
-      'BAD_REQUEST',
-      'Buổi đã có khoản thanh toán đối soát, không thể sửa danh sách chia tiền.',
-      400
-    );
-  }
   const oldItems = dataset.session_items.filter((it) => it.session_id === sessionId);
+  const hasSettledAttendance = oldAttendances.some((a) => Boolean(a.settlement_id));
 
   const now = nowIsoVN();
   const settings = dataset.settings;
@@ -1217,6 +1261,101 @@ export function planUpdateSession(
   const guestFee = Math.max(0, Math.round(Number(payload.guestFee ?? oldSession.guest_fee ?? settings.guest_fee) || 0));
   const treasurerId = settings.treasurer_member_id;
   const payerId = String(payload.payerId || oldSession.payer_id || treasurerId || '').trim();
+  const billingMode =
+    sessionType === 'BADMINTON'
+      ? (payload.billingMode || oldSession.billing_mode || 'MONTHLY') === 'AD_HOC'
+        ? 'AD_HOC'
+        : 'MONTHLY'
+      : undefined;
+
+  if (hasSettledAttendance) {
+    const oldAttendeeIds = Array.from(new Set(oldAttendances.map((a) => a.member_id))).sort();
+    const newAttendeeIds = Array.from(
+      new Set((payload.attendeeIds || []).map((id) => String(id).trim()).filter(Boolean))
+    ).sort();
+    const sameAttendees =
+      oldAttendeeIds.length === newAttendeeIds.length &&
+      oldAttendeeIds.every((id, idx) => id === newAttendeeIds[idx]);
+    const hasNewGuests = (payload.new_guests || []).length > 0;
+    const nextTotalAmount =
+      payload.totalAmount !== undefined
+        ? Math.max(0, Math.round(Number(payload.totalAmount) || 0))
+        : oldSession.total_amount;
+    const sameBillingMode =
+      sessionType !== 'BADMINTON' ||
+      (billingMode || 'MONTHLY') === (oldSession.billing_mode || 'MONTHLY');
+    const samePayer =
+      sessionType === 'DRINKING' ||
+      billingMode !== 'AD_HOC' ||
+      payerId === (oldSession.payer_id || treasurerId || '');
+    const sameGuestFee =
+      sessionType !== 'BADMINTON' ||
+      billingMode !== 'MONTHLY' ||
+      guestFee === (oldSession.guest_fee ?? settings.guest_fee);
+
+    let sameDrinkingItems = true;
+    if (sessionType === 'DRINKING' && payload.items !== undefined) {
+      const normOldItems = oldItems
+        .filter((it) => it.amount > 0 && it.member_id)
+        .map((it) => `${it.member_id}|${it.kind}|${Math.round(it.amount)}|${String(it.item_name || '').trim()}`)
+        .sort();
+      const normNewItems = (payload.items || [])
+        .filter((it) => Number(it.amount) > 0 && it.member_id)
+        .map((it) => `${String(it.member_id).trim()}|${it.kind === 'BILL' ? 'BILL' : 'ITEM'}|${Math.round(Number(it.amount) || 0)}|${String(it.item_name || '').trim()}`)
+        .sort();
+      sameDrinkingItems =
+        normOldItems.length === normNewItems.length &&
+        normOldItems.every((v, idx) => v === normNewItems[idx]);
+    }
+
+    const financialUnchanged =
+      sessionType === oldSession.type &&
+      dateStr === oldSession.date &&
+      sameBillingMode &&
+      nextTotalAmount === oldSession.total_amount &&
+      sameGuestFee &&
+      samePayer &&
+      sameAttendees &&
+      !hasNewGuests &&
+      sameDrinkingItems;
+
+    if (!financialUnchanged) {
+      throw new ApiClientError(
+        'BAD_REQUEST',
+        'Buổi đã có khoản thanh toán đối soát, chỉ được sửa Tiêu đề, Ghi chú hoặc Ảnh hóa đơn (không sửa được số tiền / người tham gia).',
+        400
+      );
+    }
+
+    const metadataSession: Session = {
+      ...oldSession,
+      title,
+      receipt_drive_id:
+        payload.receiptDriveId !== undefined
+          ? String(payload.receiptDriveId)
+          : oldSession.receipt_drive_id,
+      receipt_url:
+        payload.receiptUrl !== undefined ? String(payload.receiptUrl) : oldSession.receipt_url,
+      receipt_summary:
+        payload.receiptSummary !== undefined
+          ? String(payload.receiptSummary)
+          : oldSession.receipt_summary,
+      note: payload.note !== undefined ? String(payload.note) : oldSession.note,
+      venue_type:
+        sessionType === 'DRINKING'
+          ? payload.venueType || oldSession.venue_type || 'RESTAURANT'
+          : oldSession.venue_type,
+      updated_at: now,
+    };
+
+    return {
+      upserts: {
+        sessions: [{ id: sessionId, data: metadataSession as unknown as Record<string, unknown> }],
+      },
+      deletes: {},
+      result: { session: metadataSession },
+    };
+  }
 
   const guestRes = resolveQuickNewGuests(
     dataset.members,
@@ -1234,12 +1373,6 @@ export function planUpdateSession(
   let attendeeCount = attendeeIds.length;
   let attendanceRows: Attendance[] = [];
   let itemsToSave: SessionItem[] = [];
-  const billingMode =
-    sessionType === 'BADMINTON'
-      ? (payload.billingMode || oldSession.billing_mode || 'MONTHLY') === 'AD_HOC'
-        ? 'AD_HOC'
-        : 'MONTHLY'
-      : undefined;
   const unit = settings.rounding_unit || 1000;
 
   if (sessionType === 'BADMINTON') {
@@ -1437,6 +1570,81 @@ export function planDeleteSession(
   };
 }
 
+const REC_LEDGER_PREFIX = 'REC:';
+
+function encodeReconciledIds(ids: string[]): string {
+  const clean = Array.from(new Set(ids.map((x) => x.trim()).filter(Boolean)));
+  return clean.length > 0 ? `${REC_LEDGER_PREFIX}${clean.join(',')}` : '';
+}
+
+function parseReconciledIds(raw: string | undefined): string[] {
+  const str = String(raw || '').trim();
+  if (!str.startsWith(REC_LEDGER_PREFIX)) return [];
+  return str
+    .slice(REC_LEDGER_PREFIX.length)
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function applyDrinkingItemsPaymentToRows(
+  rows: Attendance[],
+  sessionId: string,
+  sourceAttIds: Set<string>,
+  toMemberId: string,
+  settlementId: string,
+  paidAt: string
+): Attendance[] {
+  let reduction = 0;
+  const nextRows = rows.map((a) => {
+    if (a.session_id === sessionId && sourceAttIds.has(a.attendance_id) && !a.is_paid) {
+      const amt = Math.abs(Math.round(Number(a.net_amount) || Number(a.fee_amount) || 0));
+      reduction += amt;
+      return {
+        ...a,
+        net_amount: 0,
+        is_paid: true,
+        paid_at: paidAt,
+        settlement_id: settlementId,
+      };
+    }
+    return { ...a };
+  });
+
+  if (reduction <= 0) return nextRows;
+
+  // Phân bổ giảm nợ cho chủ nợ trong buổi: ưu tiên toMemberId, sau đó chủ nợ âm nhiều nhất
+  const creditorIndices = nextRows
+    .map((a, idx) => ({ a, idx }))
+    .filter(({ a }) => a.session_id === sessionId && !a.is_paid && a.net_amount < 0)
+    .sort((x, y) => {
+      const xPref = x.a.member_id === toMemberId ? 0 : 1;
+      const yPref = y.a.member_id === toMemberId ? 0 : 1;
+      if (xPref !== yPref) return xPref - yPref;
+      return x.a.net_amount - y.a.net_amount;
+    });
+
+  let remaining = reduction;
+  for (const { idx } of creditorIndices) {
+    if (remaining <= 0) break;
+    const creditor = nextRows[idx];
+    const canAbsorb = Math.abs(creditor.net_amount);
+    const apply = Math.min(remaining, canAbsorb);
+    const nextNet = Math.round(creditor.net_amount + apply);
+    const closed = nextNet >= 0;
+    nextRows[idx] = {
+      ...creditor,
+      net_amount: closed ? 0 : nextNet,
+      is_paid: closed,
+      paid_at: closed ? paidAt : creditor.paid_at,
+      settlement_id: closed ? settlementId : creditor.settlement_id,
+    };
+    remaining -= apply;
+  }
+
+  return nextRows;
+}
+
 export function planConfirmPayment(
   dataset: ClubDataset,
   payload: ConfirmPaymentPayload,
@@ -1510,42 +1718,37 @@ export function planConfirmPayment(
   if (mode === 'ITEMS') {
     const setIds = new Set(payload.attendanceIds || []);
     let totalPaid = 0;
-    const sessionReductions = new Map<string, number>();
-    const updatedAttMap = new Map<string, Attendance>();
+    const affectedSessionIds = new Set<string>();
 
     for (const a of dataset.attendance) {
       if (a.session_type === 'DRINKING' && setIds.has(a.attendance_id) && !a.is_paid) {
-        const amt = Math.abs(Math.round(Number(a.net_amount) || Number(a.fee_amount) || 0));
-        totalPaid += amt;
-        sessionReductions.set(a.session_id, (sessionReductions.get(a.session_id) || 0) + amt);
-        updatedAttMap.set(a.attendance_id, {
-          ...a,
-          net_amount: 0,
-          is_paid: true,
-          paid_at: now,
-          settlement_id: settlementId,
-        });
+        totalPaid += Math.abs(Math.round(Number(a.net_amount) || Number(a.fee_amount) || 0));
+        if (a.session_id) affectedSessionIds.add(a.session_id);
       }
     }
 
-    for (const a of dataset.attendance) {
-      if (
-        a.session_type === 'DRINKING' &&
-        !a.is_paid &&
-        a.net_amount < 0 &&
-        a.member_id === payload.toMemberId &&
-        (sessionReductions.get(a.session_id) || 0) > 0
-      ) {
-        const red = sessionReductions.get(a.session_id) || 0;
-        const nextNet = Math.round(a.net_amount + red);
-        const closed = nextNet >= 0;
-        updatedAttMap.set(a.attendance_id, {
-          ...a,
-          net_amount: closed ? 0 : nextNet,
-          is_paid: closed,
-          paid_at: closed ? now : a.paid_at,
-          settlement_id: closed ? settlementId : a.settlement_id,
-        });
+    const updatedAtts: Attendance[] = [];
+    for (const sid of affectedSessionIds) {
+      const sessRows = dataset.attendance.filter((a) => a.session_id === sid && a.session_type === 'DRINKING');
+      const nextSessRows = applyDrinkingItemsPaymentToRows(
+        sessRows,
+        sid,
+        setIds,
+        payload.toMemberId,
+        settlementId,
+        now
+      );
+      const beforeById = new Map(sessRows.map((r) => [r.attendance_id, r]));
+      for (const r of nextSessRows) {
+        const prev = beforeById.get(r.attendance_id);
+        if (
+          !prev ||
+          prev.net_amount !== r.net_amount ||
+          prev.is_paid !== r.is_paid ||
+          prev.settlement_id !== r.settlement_id
+        ) {
+          updatedAtts.push(r);
+        }
       }
     }
 
@@ -1569,7 +1772,7 @@ export function planConfirmPayment(
 
     const plan: BatchMutationPlan<ConfirmPaymentResponse> = {
       upserts: {
-        attendance: Array.from(updatedAttMap.values()).map((a) => ({
+        attendance: updatedAtts.map((a) => ({
           id: a.attendance_id,
           data: a as unknown as Record<string, unknown>,
         })),
@@ -1630,9 +1833,16 @@ export function planConfirmPayment(
         paid_at: now,
         settlement_id: settlementId,
       }));
-    const reconciledSettlements: Settlement[] = nextDataset.settlements
-      .filter((s) => (!s.category || s.category === 'DRINKING') && !s.is_reconciled)
-      .map((s) => ({ ...s, is_reconciled: true }));
+    const batchRaw = nextDataset.settlements.filter(
+      (s) => (!s.category || s.category === 'DRINKING') && !s.is_reconciled
+    );
+    const encodedBatch = encodeReconciledIds(batchRaw.map((s) => s.settlement_id));
+    const reconciledSettlements: Settlement[] = batchRaw.map((s) => ({
+      ...s,
+      is_reconciled: true,
+      source_ledger_ids:
+        s.settlement_id === settlementId ? encodedBatch : s.source_ledger_ids,
+    }));
 
     if (closedAtts.length > 0) {
       initialPlan.upserts.attendance = closedAtts.map((a) => ({
@@ -1672,79 +1882,188 @@ export function planUndoSettlement(
       .map((x) => x.trim())
       .filter(Boolean)
   );
-  const affectedSessionIds = new Set<string>();
   const updatedAttMap = new Map<string, Attendance>();
+  const updatedSettlements: Settlement[] = [];
 
-  for (const a of dataset.attendance) {
-    if (a.settlement_id === settlementId || sourceSet.has(a.attendance_id)) {
-      if (a.session_id) affectedSessionIds.add(a.session_id);
-      const fee = Math.round(Number(a.fee_amount) || 0);
-      const contrib = Math.round(Number(a.contributed_amount) || 0);
-      updatedAttMap.set(a.attendance_id, {
-        ...a,
-        is_paid: false,
-        paid_at: '',
-        settlement_id: '',
-        net_amount: category === 'DRINKING' ? fee - contrib : fee,
-      });
-    }
-  }
-
-  if (category === 'DRINKING' && affectedSessionIds.size > 0) {
-    const membersMap = buildMembersMap(dataset.members);
-    const unit = dataset.settings.rounding_unit || 1000;
-    const now = nowIsoVN();
-
-    for (const sId of affectedSessionIds) {
-      const sess = dataset.sessions.find((s) => s.session_id === sId);
-      if (!sess) continue;
-      const sessAtts = dataset.attendance.filter((a) => a.session_id === sId);
-      if (sessAtts.length === 0) continue;
-      const sessItems = dataset.session_items.filter((it) => it.session_id === sId);
-
-      const recomputed = buildDrinkingSplitRows({
-        sessionId: sId,
-        dateStr: sess.date,
-        attendeeIds: sessAtts.map((a) => a.member_id),
-        rawItems: sessItems.map((it) => ({
-          member_id: it.member_id,
-          kind: it.kind,
-          item_name: it.item_name,
-          amount: it.amount,
-        })),
-        payerId: sess.payer_id,
-        totalAmountFallback: sess.total_amount,
-        roundingUnit: unit,
-        membersMap,
-        now,
-      });
-
-      const netByMember = new Map(recomputed.attendanceRows.map((r) => [r.member_id, r]));
-      for (const a of sessAtts) {
-        const baseRow = updatedAttMap.get(a.attendance_id) || a;
-        const rRow = netByMember.get(baseRow.member_id);
-        if (!rRow) continue;
-        const isZero = rRow.net_amount === 0;
-        updatedAttMap.set(baseRow.attendance_id, {
-          ...baseRow,
-          net_amount: rRow.net_amount,
-          is_paid: isZero,
-          paid_at: isZero ? baseRow.paid_at || now : '',
-          settlement_id: isZero ? baseRow.settlement_id : '',
+  if (category === 'BADMINTON') {
+    for (const a of dataset.attendance) {
+      if (a.settlement_id === settlementId || sourceSet.has(a.attendance_id)) {
+        const fee = Math.round(Number(a.fee_amount) || 0);
+        updatedAttMap.set(a.attendance_id, {
+          ...a,
+          is_paid: false,
+          paid_at: '',
+          settlement_id: '',
+          net_amount: fee,
         });
+      }
+    }
+  } else if (sourceSet.size === 0) {
+    // DRINKING SIMPLIFIED_TRANSFER:
+    // - Nếu chưa đối soát (!st.is_reconciled): chỉ cần xóa bản ghi settlement
+    // - Nếu đã chốt đợt: mở lại attendance gắn với giao dịch chốt đợt & trả các giao dịch còn lại về is_reconciled=false
+    if (st.is_reconciled) {
+      const ownBatchIds = parseReconciledIds(st.source_ledger_ids);
+      const closingSt =
+        ownBatchIds.length > 0
+          ? st
+          : dataset.settlements.find((s) => parseReconciledIds(s.source_ledger_ids).includes(settlementId));
+
+      if (closingSt) {
+        const batchIds = parseReconciledIds(closingSt.source_ledger_ids);
+        for (const a of dataset.attendance) {
+          if (a.settlement_id === closingSt.settlement_id) {
+            updatedAttMap.set(a.attendance_id, {
+              ...a,
+              is_paid: false,
+              paid_at: '',
+              settlement_id: '',
+            });
+          }
+        }
+        for (const bId of batchIds) {
+          if (bId === settlementId) continue;
+          const bSt = dataset.settlements.find((s) => s.settlement_id === bId);
+          if (bSt) {
+            updatedSettlements.push({
+              ...bSt,
+              is_reconciled: false,
+              source_ledger_ids: bSt.settlement_id === closingSt.settlement_id ? '' : bSt.source_ledger_ids,
+            });
+          }
+        }
+      } else {
+        // Fallback cho dữ liệu cũ chưa gắn REC:
+        for (const a of dataset.attendance) {
+          if (a.settlement_id === settlementId) {
+            updatedAttMap.set(a.attendance_id, {
+              ...a,
+              is_paid: false,
+              paid_at: '',
+              settlement_id: '',
+            });
+          }
+        }
+      }
+    }
+  } else {
+    // DRINKING ITEMS: tính lại gốc buổi bị ảnh hưởng rồi replay các settlement ITEMS còn lại
+    const affectedSessionIds = new Set<string>();
+    for (const a of dataset.attendance) {
+      if (a.settlement_id === settlementId || sourceSet.has(a.attendance_id)) {
+        if (a.session_id) affectedSessionIds.add(a.session_id);
+      }
+    }
+
+    if (affectedSessionIds.size > 0) {
+      const membersMap = buildMembersMap(dataset.members);
+      const unit = dataset.settings.rounding_unit || 1000;
+      const now = nowIsoVN();
+
+      const remainingItemSettlements = dataset.settlements
+        .filter(
+          (s) =>
+            s.settlement_id !== settlementId &&
+            (!s.category || s.category === 'DRINKING') &&
+            String(s.source_attendance_ids || '').trim() !== ''
+        )
+        .sort((a, b) => (a.settled_at || '').localeCompare(b.settled_at || ''));
+
+      for (const sId of affectedSessionIds) {
+        const sess = dataset.sessions.find((s) => s.session_id === sId);
+        if (!sess) continue;
+        const sessAtts = dataset.attendance.filter((a) => a.session_id === sId);
+        if (sessAtts.length === 0) continue;
+        const sessItems = dataset.session_items.filter((it) => it.session_id === sId);
+
+        const recomputed = buildDrinkingSplitRows({
+          sessionId: sId,
+          dateStr: sess.date,
+          attendeeIds: sessAtts.map((a) => a.member_id),
+          rawItems: sessItems.map((it) => ({
+            member_id: it.member_id,
+            kind: it.kind,
+            item_name: it.item_name,
+            amount: it.amount,
+          })),
+          payerId: sess.payer_id,
+          totalAmountFallback: sess.total_amount,
+          roundingUnit: unit,
+          membersMap,
+          now,
+        });
+
+        const netByMember = new Map(recomputed.attendanceRows.map((r) => [r.member_id, r]));
+        let workingRows: Attendance[] = sessAtts.map((a) => {
+          const rRow = netByMember.get(a.member_id);
+          if (!rRow) return { ...a };
+          const isZero = rRow.net_amount === 0;
+          return {
+            ...a,
+            net_amount: rRow.net_amount,
+            is_paid: isZero,
+            paid_at: isZero ? a.paid_at || now : '',
+            settlement_id: '',
+          };
+        });
+
+        for (const remSt of remainingItemSettlements) {
+          const remAttSet = new Set(
+            String(remSt.source_attendance_ids || '')
+              .split(',')
+              .map((x) => x.trim())
+              .filter(Boolean)
+          );
+          if (!workingRows.some((r) => remAttSet.has(r.attendance_id))) continue;
+          workingRows = applyDrinkingItemsPaymentToRows(
+            workingRows,
+            sId,
+            remAttSet,
+            remSt.to_member_id,
+            remSt.settlement_id,
+            remSt.settled_at || now
+          );
+        }
+
+        // Bảo toàn trạng thái nếu buổi đang nằm trong đợt chốt SIMPLIFIED_TRANSFER khác còn hiệu lực
+        for (const r of workingRows) {
+          const orig = sessAtts.find((o) => o.attendance_id === r.attendance_id);
+          if (
+            orig &&
+            !r.is_paid &&
+            orig.is_paid &&
+            orig.settlement_id &&
+            orig.settlement_id !== settlementId
+          ) {
+            const origSt = dataset.settlements.find((s) => s.settlement_id === orig.settlement_id);
+            if (origSt && origSt.is_reconciled && !origSt.source_attendance_ids) {
+              r.is_paid = true;
+              r.paid_at = orig.paid_at;
+              r.settlement_id = orig.settlement_id;
+            }
+          }
+          updatedAttMap.set(r.attendance_id, r);
+        }
       }
     }
   }
 
+  const upserts: Partial<Record<CollectionKey, MutationUpsertItem[]>> = {};
+  if (updatedAttMap.size > 0) {
+    upserts.attendance = Array.from(updatedAttMap.values()).map((a) => ({
+      id: a.attendance_id,
+      data: a as unknown as Record<string, unknown>,
+    }));
+  }
+  if (updatedSettlements.length > 0) {
+    upserts.settlements = updatedSettlements.map((s) => ({
+      id: s.settlement_id,
+      data: s as unknown as Record<string, unknown>,
+    }));
+  }
+
   const plan: BatchMutationPlan<{ undoneSettlementId: string; updatedDebts: SeparatedDebtsData }> = {
-    upserts: updatedAttMap.size > 0
-      ? {
-          attendance: Array.from(updatedAttMap.values()).map((a) => ({
-            id: a.attendance_id,
-            data: a as unknown as Record<string, unknown>,
-          })),
-        }
-      : {},
+    upserts,
     deletes: { settlements: [settlementId] },
     result: {
       undoneSettlementId: settlementId,
@@ -1900,26 +2219,40 @@ export function planIssueMonthlyBill(
     throw new ApiClientError('BAD_REQUEST', 'month phải đúng định dạng YYYY-MM.', 400);
   }
 
-  const membersMap = buildMembersMap(dataset.members);
-  const current = buildMonthlyBillData(dataset, targetMonth);
+  const mainMembers = dataset.members.filter((m) => m.is_active && m.type === 'MAIN');
+  const memberIds =
+    payload.memberIds && payload.memberIds.length > 0
+      ? Array.from(new Set(payload.memberIds.map((id) => String(id).trim()).filter(Boolean)))
+      : mainMembers.map((m) => m.member_id);
+  if (memberIds.length === 0) {
+    throw new ApiClientError('BAD_REQUEST', 'Không có thành viên chính (MAIN) nào để chia tiền tháng.', 400);
+  }
+
+  const membersForCalc = [...dataset.members];
+  const updatedMembers: Member[] = [];
+  const now = nowIsoVN();
+  if (payload.syncMemberTypes) {
+    const selectedSet = new Set(memberIds);
+    for (let i = 0; i < membersForCalc.length; i++) {
+      const m = membersForCalc[i];
+      if (!m.is_active) continue;
+      const targetType: Member['type'] = selectedSet.has(m.member_id) ? 'MAIN' : 'GUEST';
+      if (m.type !== targetType) {
+        const updatedM: Member = { ...m, type: targetType, updated_at: now };
+        membersForCalc[i] = updatedM;
+        updatedMembers.push(updatedM);
+      }
+    }
+  }
+
+  const membersMap = buildMembersMap(membersForCalc);
+  const current = buildMonthlyBillData(
+    updatedMembers.length > 0 ? { ...dataset, members: membersForCalc } : dataset,
+    targetMonth
+  );
   const carryIn =
     payload.carryIn !== undefined ? Math.round(Number(payload.carryIn) || 0) : current.bill.carry_in;
 
-  let memberIds = (payload.memberIds || []).map((id) => String(id).trim()).filter(Boolean);
-  if (memberIds.length === 0) {
-    memberIds = dataset.members
-      .filter((m) => m.is_active && m.type === 'MAIN')
-      .map((m) => m.member_id);
-  }
-  if (memberIds.length === 0) {
-    throw new ApiClientError(
-      'BAD_REQUEST',
-      'Phải chọn ít nhất 1 thành viên MAIN để chia hóa đơn tháng.',
-      400
-    );
-  }
-
-  const now = nowIsoVN();
   const appliedCredits = normalizeContributionsList(
     payload.appliedCredits ?? current.prevMonthContributions,
     membersMap,
@@ -1958,7 +2291,18 @@ export function planIssueMonthlyBill(
 
   const nextDues: MonthlyDue[] = detailed.memberDues.map((line, i) => {
     const oldPaid = oldPaidMap.get(line.memberId);
-    const isPaid = oldPaid ? true : line.netAmount === 0;
+    const oldPaidAmount = oldPaid ? Math.round(Number(oldPaid.amount) || 0) : 0;
+    const isExactMatch = Boolean(oldPaid && (oldPaidAmount === line.netAmount || line.netAmount === 0));
+    const isPaid = isExactMatch || line.netAmount === 0;
+    let creditNote = line.creditNote;
+    if (oldPaid && !isExactMatch) {
+      const diff = line.netAmount - oldPaidAmount;
+      const diffNote =
+        diff > 0
+          ? `Đã đóng trước ${oldPaidAmount.toLocaleString('vi-VN')}đ — thiếu thêm ${diff.toLocaleString('vi-VN')}đ`
+          : `Đã đóng trước ${oldPaidAmount.toLocaleString('vi-VN')}đ — dư ${(-diff).toLocaleString('vi-VN')}đ cần hoàn`;
+      creditNote = creditNote ? `${creditNote} • ${diffNote}` : diffNote;
+    }
     return {
       due_id: generateEntityId('DUE', String(i)),
       month: targetMonth,
@@ -1967,10 +2311,14 @@ export function planIssueMonthlyBill(
       amount: line.netAmount,
       base_amount: line.baseAmount,
       credit_amount: line.creditAmount,
-      credit_note: line.creditNote,
+      credit_note: creditNote,
       is_paid: isPaid,
-      paid_at: oldPaid ? oldPaid.paid_at || now : isPaid ? now : '',
-      confirmed_by: oldPaid ? oldPaid.confirmed_by || editorEmail : isPaid ? editorEmail : '',
+      paid_at: isExactMatch ? oldPaid?.paid_at || now : line.netAmount === 0 ? now : '',
+      confirmed_by: isExactMatch
+        ? oldPaid?.confirmed_by || editorEmail
+        : line.netAmount === 0
+        ? editorEmail
+        : '',
     };
   });
 
@@ -1979,6 +2327,12 @@ export function planIssueMonthlyBill(
     id: `CARRY_${targetMonth}_${c.member_id}`,
     member_name: membersMap.get(c.member_id)?.name || c.member_id,
     note: `Dư góp cầu T${targetMonth.slice(5, 7)} chuyển sang`,
+    created_at: now,
+  }));
+
+  const refundCredits: ShuttleContributionItem[] = detailed.refundCredits.map((r) => ({
+    ...r,
+    member_name: membersMap.get(r.member_id)?.name || r.member_name || r.member_id,
     created_at: now,
   }));
 
@@ -2004,20 +2358,94 @@ export function planIssueMonthlyBill(
     shuttle_tube_price: shuttleTubePrice,
     shuttle_tube_amount: shuttleTubeAmount,
     prev_overtime_fee: prevOvertimeFee,
-    bill_detail: JSON.stringify({ ...(payload.billDetail || {}), appliedCredits }),
+    bill_detail: JSON.stringify({
+      ...(payload.billDetail || {}),
+      appliedCredits,
+      refundCredits,
+      refundCreditsTotal: detailed.refundCreditsTotal,
+    }),
     shuttle_contributions: existingBill?.shuttle_contributions || '[]',
     applied_credits_total: detailed.appliedCreditsTotal,
+    refund_credits_total: detailed.refundCreditsTotal,
     carry_over_credits: JSON.stringify(carryOverCredits),
   };
 
+  const scheduleUpserts: Array<{ id: string; data: Record<string, unknown> }> = [];
+  const sc = payload.scheduleConfig;
+  if (sc && Array.isArray(sc.weekdays) && sc.weekdays.length > 0) {
+    const genDates = generateMonthScheduleDates(targetMonth, sc.weekdays, sc.fromDate);
+    const existingDates = new Set(
+      dataset.schedule.filter((d) => d.date.slice(0, 7) === targetMonth).map((d) => d.date)
+    );
+    const fixedByDate = new Map<string, Session>();
+    for (const s of dataset.sessions) {
+      if (s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC' && s.date.slice(0, 7) === targetMonth) {
+        if (!fixedByDate.has(s.date)) fixedByDate.set(s.date, s);
+      }
+    }
+    const courtsNum = Math.max(1, Math.round(Number(sc.courts) || dataset.settings.default_court_count || 2));
+    const sTime = sc.startTime || '20:00';
+    const eTime = sc.endTime || '21:30';
+    const plannedCsv = memberIds.join(',');
+
+    for (const d of genDates) {
+      if (existingDates.has(d)) continue;
+      const matched = fixedByDate.get(d);
+      const newPlan: ScheduleDay & { month: string } = {
+        plan_id: generateEntityId('PLN', d.slice(8, 10)),
+        date: d,
+        month: targetMonth,
+        start_time: sTime,
+        end_time: eTime,
+        courts: courtsNum,
+        planned_member_ids: plannedCsv,
+        status: matched ? 'DONE' : 'PLANNED',
+        session_id: matched?.session_id || '',
+        note: '',
+        created_at: now,
+        updated_at: now,
+      };
+      scheduleUpserts.push({
+        id: newPlan.plan_id,
+        data: newPlan as unknown as Record<string, unknown>,
+      });
+    }
+
+    for (const row of dataset.schedule) {
+      if (row.date.slice(0, 7) === targetMonth && row.status === 'PLANNED') {
+        const updatedPlan: ScheduleDay & { month: string } = {
+          ...row,
+          month: targetMonth,
+          planned_member_ids: plannedCsv,
+          updated_at: now,
+        };
+        scheduleUpserts.push({
+          id: updatedPlan.plan_id,
+          data: updatedPlan as unknown as Record<string, unknown>,
+        });
+      }
+    }
+  }
+
+  const upserts: Partial<Record<CollectionKey, MutationUpsertItem[]>> = {
+    monthly_bills: [{ id: targetMonth, data: nextBill as unknown as Record<string, unknown> }],
+    monthly_dues: nextDues.map((d) => ({
+      id: d.due_id,
+      data: d as unknown as Record<string, unknown>,
+    })),
+  };
+  if (updatedMembers.length > 0) {
+    upserts.members = updatedMembers.map((m) => ({
+      id: m.member_id,
+      data: m as unknown as Record<string, unknown>,
+    }));
+  }
+  if (scheduleUpserts.length > 0) {
+    upserts.schedule = scheduleUpserts;
+  }
+
   const plan: BatchMutationPlan<MonthlyBillData> = {
-    upserts: {
-      monthly_bills: [{ id: targetMonth, data: nextBill as unknown as Record<string, unknown> }],
-      monthly_dues: nextDues.map((d) => ({
-        id: d.due_id,
-        data: d as unknown as Record<string, unknown>,
-      })),
-    },
+    upserts,
     deletes: {
       monthly_dues: existingDues.map((d) => d.due_id),
     },
@@ -2147,7 +2575,11 @@ export function planCloseMonth(
   } else {
     actualCost = actualCostOverride !== null ? actualCostOverride : current.bill.actual_cost;
     carryOut =
-      current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost;
+      current.bill.carry_in +
+      current.bill.billed_total +
+      current.bill.guest_income -
+      actualCost -
+      (current.bill.refund_credits_total || 0);
     nextActualCostOverride = actualCostOverride;
     if ('carryOutOverride' in parsedDetail) {
       const { carryOutOverride: _removed, ...rest } = parsedDetail;

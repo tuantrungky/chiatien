@@ -148,6 +148,8 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
   const netBalances: NetBalanceItem[] = [];
   const debtors: Array<{ memberId: string; amount: number }> = [];
   const creditors: Array<{ memberId: string; amount: number }> = [];
+  let totalDebtors = 0;
+  let totalCreditors = 0;
 
   for (const [memberId, rawBal] of netMap.entries()) {
     const balance = Math.round(rawBal);
@@ -158,10 +160,14 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
 
     if (balance < 0) {
       debtors.push({ memberId, amount: -balance });
+      totalDebtors += -balance;
     } else {
       creditors.push({ memberId, amount: balance });
+      totalCreditors += balance;
     }
   }
+
+  const imbalanceAmount = totalCreditors - totalDebtors;
 
   debtors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
   creditors.sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : a.memberId.localeCompare(b.memberId)));
@@ -212,10 +218,24 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
     if (creditor.amount === 0) j++;
   }
 
+  const transferCountByDebtor = new Map<string, number>();
+  for (const tr of transfers) {
+    transferCountByDebtor.set(
+      tr.fromMember.member_id,
+      (transferCountByDebtor.get(tr.fromMember.member_id) || 0) + 1
+    );
+  }
+  for (const tr of transfers) {
+    if ((transferCountByDebtor.get(tr.fromMember.member_id) || 0) > 1) {
+      tr.isSplitFromMultipleTransfers = true;
+    }
+  }
+
   return {
     netBalances,
     transfers,
     totalOutstanding,
+    imbalanceAmount,
   };
 }
 

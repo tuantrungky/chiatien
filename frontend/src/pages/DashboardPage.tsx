@@ -189,6 +189,18 @@ export function DashboardPage({
     () => badmintonPeriodSessions.reduce((sum, s) => sum + s.total_amount, 0),
     [badmintonPeriodSessions]
   );
+  const monthlyBillCostInPeriod = useMemo(() => {
+    if (periodType === 'WEEK') return 0;
+    if (periodType === 'MONTH' && monthlyBill?.month === refDate.slice(0, 7)) {
+      const issued =
+        (monthlyBill.dues?.length || 0) > 0 ||
+        (monthlyBill.bill?.billed_total ?? 0) > 0 ||
+        monthlyBill.bill?.status === 'CLOSED';
+      return issued ? monthlyBill.bill?.actual_cost ?? 0 : 0;
+    }
+    return dashboard?.badminton.monthlyBillCostInPeriod ?? 0;
+  }, [periodType, monthlyBill, refDate, dashboard]);
+  const badmintonDisplayCost = badmintonCostInPeriod + monthlyBillCostInPeriod;
 
   const drinkingPeriodSessions = useMemo(
     () => periodSessions.filter((s) => s.type === 'DRINKING'),
@@ -268,10 +280,10 @@ export function DashboardPage({
   const pieChartData = useMemo(
     () =>
       [
-        { name: 'Chi Cầu lông', value: badmintonCostInPeriod, color: '#059669' },
+        { name: 'Chi Cầu lông', value: badmintonDisplayCost, color: '#059669' },
         { name: 'Chi Ăn nhậu', value: drinkingCostInPeriod, color: '#f97316' },
       ].filter((item) => item.value > 0),
-    [badmintonCostInPeriod, drinkingCostInPeriod]
+    [badmintonDisplayCost, drinkingCostInPeriod]
   );
 
   const recentSessions = useMemo(
@@ -354,11 +366,12 @@ export function DashboardPage({
             <Trophy className="w-4 h-4 text-amber-300 shrink-0" />
           </div>
           <p className="text-lg sm:text-xl font-extrabold tracking-tight">
-            {formatVND(badmintonCostInPeriod)}
+            {formatVND(badmintonDisplayCost)}
           </p>
           <p className="text-[11px] text-sky-100/90 mt-1 flex items-center justify-between gap-1">
-            <span>
+            <span className="truncate">
               {fixedCountInPeriod} cố định • {adhocCountInPeriod} phát sinh
+              {monthlyBillCostInPeriod > 0 ? ` • +sân tháng ${formatVND(monthlyBillCostInPeriod)}` : ''}
             </span>
             <span aria-hidden="true">→</span>
           </p>
@@ -518,6 +531,13 @@ export function DashboardPage({
             <strong>Ý nghĩa:</strong> Nếu kết quả <strong>Dư (+)</strong> (nhờ thu thêm vãng lai hoặc
             đánh ít hơn dự toán), tháng sau mỗi thành viên chính sẽ đóng ít đi phần dư này. Nếu{' '}
             <strong>Thiếu (−)</strong>, tháng sau sẽ cộng bù vào dự toán để chia đều.{' '}
+            {(bill?.refund_credits_total ?? 0) > 0 && (
+              <>
+                <em>
+                  (Đã trừ thêm {formatVND(bill?.refund_credits_total ?? 0)} hoàn góp cầu cho người không đánh MAIN.)
+                </em>{' '}
+              </>
+            )}
             <em>(Các buổi cầu phát sinh đã chia riêng từng buổi nên không tính vào đây.)</em>
           </p>
         </section>
@@ -969,6 +989,15 @@ export function DashboardPage({
             </button>
           </div>
 
+          {(simplifiedDrinkingDebts.imbalanceAmount ?? 0) !== 0 && (
+            <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-xs font-semibold text-amber-900">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                Phát hiện chênh lệch sổ ăn nhậu ({formatVND(simplifiedDrinkingDebts.imbalanceAmount ?? 0)}). Vui lòng kiểm tra mục Công nợ hoặc hoàn tác giao dịch nhầm.
+              </span>
+            </div>
+          )}
+
           {(() => {
             const visibleTransfers = filteredDebts.drinkingTransfers;
 
@@ -1015,6 +1044,11 @@ export function DashboardPage({
                             <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                             <span className="font-semibold text-orange-700">{tr.toMember.name}</span>
                             {oldestDate && <OverdueBadge fromDate={oldestDate} todayStr={todayStr} />}
+                            {tr.isSplitFromMultipleTransfers && (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                Chia nhiều người nhận
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
                             <span className="font-extrabold text-rose-600 text-sm">
@@ -1080,7 +1114,12 @@ export function DashboardPage({
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-bold text-slate-900">So sánh chi Cầu lông &amp; Ăn nhậu</h2>
-            <p className="text-xs text-slate-500">Theo bộ lọc kỳ đang chọn</p>
+            <p className="text-xs text-slate-500">
+              Theo bộ lọc kỳ đang chọn
+              {monthlyBillCostInPeriod > 0
+                ? ` • Tỷ trọng đã gồm hóa đơn sân tháng (${formatVND(monthlyBillCostInPeriod)})`
+                : ''}
+            </p>
           </div>
           <div className="inline-flex bg-slate-100 p-1 rounded-xl shrink-0">
             <button

@@ -45,6 +45,21 @@ export function buildMonthlyBillZaloMessage(params: {
       `• Dư/thiếu T.trước: ${bill.carry_in >= 0 ? '+' : ''}${formatVND(bill.carry_in)}`
     );
   }
+  if (bill.bill_detail) {
+    try {
+      const detail = JSON.parse(bill.bill_detail) as {
+        refundCredits?: Array<{ member_name?: string; member_id: string; amount: number }>;
+      };
+      if (Array.isArray(detail.refundCredits) && detail.refundCredits.length > 0) {
+        const listStr = detail.refundCredits
+          .map((r) => `${r.member_name || r.member_id} (${formatVND(r.amount)})`)
+          .join(', ');
+        lines.push(`• Hoàn tiền góp cầu (không đánh chính): ${listStr}`);
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  }
   lines.push(`• Phần gốc mỗi người: ${formatVND(bill.per_member)}`);
 
   const unpaid = dues.filter((d) => !d.is_paid && d.amount > 0);
