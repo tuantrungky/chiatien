@@ -340,12 +340,16 @@ export function CreateSessionPage({
         roundingAdjustedMemberId: '',
       };
     }
+    const primaryBill = drinkingItems.find(
+      (it) => it.kind === 'BILL' && Number(it.amount) > 0 && String(it.member_id || '').trim()
+    );
     return calculateDrinkingSplit(
       selectedIds,
       drinkingItems,
-      settings.rounding_unit || 1000
+      settings.rounding_unit || 1000,
+      primaryBill?.member_id || defaultTreasurerId
     );
-  }, [sessionType, selectedIds, drinkingItems, settings.rounding_unit]);
+  }, [sessionType, selectedIds, drinkingItems, settings.rounding_unit, defaultTreasurerId]);
 
   const filteredMembers = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
@@ -1801,18 +1805,17 @@ export function CreateSessionPage({
 
         {sessionType === 'DRINKING' && drinkingSplitPreview.roundingAdjustment !== 0 && (
           <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-900">
-            Làm tròn {formatVND(settings.rounding_unit || 1000)}: bù lệch{' '}
+            Làm tròn lên {formatVND(settings.rounding_unit || 1000)}: phần dư{' '}
             <strong>
-              {drinkingSplitPreview.roundingAdjustment > 0 ? '+' : ''}
-              {formatVND(drinkingSplitPreview.roundingAdjustment)}
+              +{formatVND(Math.abs(drinkingSplitPreview.roundingAdjustment))}
             </strong>{' '}
-            cho{' '}
+            cộng về{' '}
             <strong>
               {activeMembers.find(
                 (m) => m.member_id === drinkingSplitPreview.roundingAdjustedMemberId
-              )?.name || 'người nhận nhiều nhất'}
+              )?.name || 'người ứng chính'}
             </strong>{' '}
-            để tổng chia cân bằng 0đ.
+            (người ứng chính) để tránh hụt tiền và tổng chia cân bằng 0đ.
           </div>
         )}
 

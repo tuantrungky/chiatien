@@ -22,6 +22,7 @@ import type {
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBill,
   MonthlyBillData,
   MonthlyBillDetail,
@@ -83,9 +84,10 @@ export function nowIsoVN(): string {
 }
 
 export function generateEntityId(prefix: string, suffix = ''): string {
-  const vn = getNowVN();
+  const now = new Date();
+  const vn = getNowVN(now);
   const compactDate = vn.date.replace(/-/g, '');
-  const compactTime = vn.time.replace(/:/g, '') + String(new Date().getSeconds()).padStart(2, '0');
+  const compactTime = vn.time.replace(/:/g, '') + String(now.getSeconds()).padStart(2, '0');
   const rand = Math.floor(1000 + Math.random() * 9000);
   return `${prefix}_${compactDate}_${compactTime}_${rand}${suffix ? `_${suffix}` : ''}`;
 }
@@ -211,11 +213,25 @@ function buildMembersMap(members: Member[]): Map<string, Member> {
   return map;
 }
 
+function toPublicMemberRecord(m: Member, hasEmail?: boolean): Member {
+  const { phone: _phone, email: _email, ...rest } = m;
+  return {
+    ...rest,
+    has_email: hasEmail ?? Boolean(m.email || m.has_email),
+  };
+}
+
+function stripTransientMonthlyBillFields(bill: MonthlyBill): MonthlyBill {
+  const { logged_sessions_cost: _lsc, is_projected_cost: _ipc, ...clean } = bill;
+  return clean;
+}
+
 function cloneDataset(dataset: ClubDataset): ClubDataset {
   return {
     settings: { ...dataset.settings, raw: dataset.settings.raw ? [...dataset.settings.raw] : undefined },
     settingsRows: dataset.settingsRows ? structuredClone(dataset.settingsRows) : undefined,
     members: structuredClone(dataset.members),
+    members_private: dataset.members_private ? structuredClone(dataset.members_private) : undefined,
     sessions: structuredClone(dataset.sessions),
     attendance: structuredClone(dataset.attendance),
     session_items: structuredClone(dataset.session_items),
@@ -224,7 +240,6 @@ function cloneDataset(dataset: ClubDataset): ClubDataset {
     monthly_dues: structuredClone(dataset.monthly_dues),
     settlements: structuredClone(dataset.settlements),
     editors: structuredClone(dataset.editors),
-    fund_ledger: dataset.fund_ledger ? structuredClone(dataset.fund_ledger) : undefined,
   };
 }
 
@@ -263,6 +278,20 @@ export function applyMutationPlanToDataset(
 
   next.members = deleteTable(next.members as unknown as Record<string, unknown>[], 'member_id', deletes.members) as unknown as Member[];
   next.members = upsertTable(next.members as unknown as Record<string, unknown>[], 'member_id', upserts.members) as unknown as Member[];
+
+  if (next.members_private || upserts.members_private || deletes.members_private) {
+    const curPriv = next.members_private || [];
+    const afterDelPriv = deleteTable(
+      curPriv as unknown as Record<string, unknown>[],
+      'member_id',
+      deletes.members_private
+    );
+    next.members_private = upsertTable(
+      afterDelPriv,
+      'member_id',
+      upserts.members_private
+    ) as unknown as MemberPrivateRecord[];
+  }
 
   next.sessions = deleteTable(next.sessions as unknown as Record<string, unknown>[], 'session_id', deletes.sessions) as unknown as Session[];
   next.sessions = upsertTable(next.sessions as unknown as Record<string, unknown>[], 'session_id', upserts.sessions) as unknown as Session[];
@@ -333,7 +362,11 @@ export function buildScheduleData(dataset: ClubDataset, monthStr?: string): Sche
   return { month: targetMonth, days };
 }
 
-export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): MonthlyBillData {
+export function buildMonthlyBillData(
+  dataset: ClubDataset,
+  monthStr?: string,
+  _depth = 0
+): MonthlyBillData {
   const targetMonth =
     monthStr && /^\d{4}-\d{2}$/.test(monthStr.trim())
       ? monthStr.trim()
@@ -377,7 +410,15 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
     dataset.settings.court_price_per_hour
   );
 
-  const carryIn = billRow ? Number(billRow.carry_in) || 0 : prevRow ? Number(prevRow.carry_out) || 0 : 0;
+  let carryIn = 0;
+  if (billRow) {
+    carryIn = Number(billRow.carry_in) || 0;
+  } else if (prevRow) {
+    carryIn =
+      prevRow.status === 'CLOSED' || _depth > 0
+        ? Number(prevRow.carry_out) || 0
+        : buildMonthlyBillData(dataset, prevMonth, 1).bill.carry_out;
+  }
   const estimate = billRow ? Number(billRow.estimate) || 0 : suggestedEstimate;
   const hasOverride =
     billRow &&
@@ -485,7 +526,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
       base_amount: d.base_amount ?? d.amount,
       credit_amount: d.credit_amount ?? 0,
       credit_note: d.credit_note || '',
-      issued_at: issuedAtRef,
+      issued_at: d.issued_at || issuedAtRef,
       is_paid: d.is_paid,
       paid_at: d.paid_at,
       transferContent: qr?.transferContent || '',
@@ -570,7 +611,7 @@ export function buildDebtsData(dataset: ClubDataset): SeparatedDebtsData {
     ...badmintonBase,
     monthlyDues: badmintonBase.monthlyDues.map((d) => ({
       ...d,
-      issued_at: billByMonth.get(d.month)?.updated_at?.slice(0, 10) || `${d.month}-01`,
+      issued_at: d.issued_at || billByMonth.get(d.month)?.updated_at?.slice(0, 10) || `${d.month}-01`,
     })),
     recentSettlements: dataset.settlements
       .filter((s) => s.category === 'BADMINTON')
@@ -711,7 +752,17 @@ export function buildGuestStatsData(dataset: ClubDataset, monthStr?: string): Gu
     });
   }
 
-  const guests = Array.from(byGuest.values()).sort((a, b) => b.totalUnpaid - a.totalUnpaid);
+  const guests = Array.from(byGuest.values())
+    .map((g) => ({
+      ...g,
+      dates: [...g.dates].sort(),
+      sessions: [...g.sessions].sort((a, b) => a.date.localeCompare(b.date)),
+    }))
+    .sort((a, b) =>
+      b.totalUnpaid !== a.totalUnpaid
+        ? b.totalUnpaid - a.totalUnpaid
+        : b.sessionCount - a.sessionCount
+    );
   return {
     month: targetMonth,
     summary: {
@@ -738,28 +789,8 @@ export function buildDashboardData(
   const debts = buildDebtsData(dataset);
   const membersMap = buildMembersMap(dataset.members);
 
-  let badCost = 0;
-  let badCount = 0;
-  let fixedCount = 0;
-  let adhocCount = 0;
-  let drinkCost = 0;
-  let drinkCount = 0;
-
-  for (const s of dataset.sessions) {
-    if (period.startDate && s.date < period.startDate) continue;
-    if (period.endDate && s.date > period.endDate) continue;
-    if (s.type === 'BADMINTON') {
-      badCost += Number(s.total_amount) || 0;
-      badCount++;
-      if (s.billing_mode === 'AD_HOC') adhocCount++;
-      else fixedCount++;
-    } else if (s.type === 'DRINKING') {
-      drinkCost += Number(s.total_amount) || 0;
-      drinkCount++;
-    }
-  }
-
   let monthlyBillCostInPeriod = 0;
+  const issuedOrClosedMonths = new Set<string>();
   if (periodType !== 'WEEK') {
     const startMonth = period.startDate ? period.startDate.slice(0, 7) : '';
     const endMonth = period.endDate ? period.endDate.slice(0, 7) : '9999-12';
@@ -777,8 +808,37 @@ export function buildDashboardData(
       const isIssuedOrClosed =
         mb.bill.status === 'CLOSED' || mb.bill.billed_total > 0 || mb.dues.length > 0;
       if (isIssuedOrClosed) {
+        issuedOrClosedMonths.add(m);
         monthlyBillCostInPeriod += Number(mb.bill.actual_cost) || 0;
       }
+    }
+  }
+
+  let badCost = 0;
+  let badCount = 0;
+  let fixedCount = 0;
+  let adhocCount = 0;
+  let drinkCost = 0;
+  let drinkCount = 0;
+
+  for (const s of dataset.sessions) {
+    if (period.startDate && s.date < period.startDate) continue;
+    if (period.endDate && s.date > period.endDate) continue;
+    if (s.type === 'BADMINTON') {
+      badCount++;
+      if (s.billing_mode === 'AD_HOC') {
+        adhocCount++;
+        badCost += Number(s.total_amount) || 0;
+      } else {
+        fixedCount++;
+        // Tránh đếm trùng: tháng đã phát hành/chốt hóa đơn đã tính qua monthlyBillCostInPeriod
+        if (periodType === 'WEEK' || !issuedOrClosedMonths.has(s.date.slice(0, 7))) {
+          badCost += Number(s.total_amount) || 0;
+        }
+      }
+    } else if (s.type === 'DRINKING') {
+      drinkCost += Number(s.total_amount) || 0;
+      drinkCount++;
     }
   }
 
@@ -921,7 +981,7 @@ function resolveQuickNewGuests(
     const existing = byNameLower.get(gName.toLowerCase());
     if (existing) {
       newGuestMemberIds.push(existing.member_id);
-      if (typeof gItem === 'object' && gItem?.paidImmediately) {
+      if (typeof gItem === 'object' && gItem?.paidImmediately === true) {
         paidImmediatelySet.add(existing.member_id);
       }
       return;
@@ -939,6 +999,7 @@ function resolveQuickNewGuests(
       account_no: '',
       account_name: '',
       email: '',
+      has_email: false,
       is_active: true,
       created_at: now,
       updated_at: now,
@@ -948,7 +1009,7 @@ function resolveQuickNewGuests(
     byNameLower.set(gName.toLowerCase(), newMem);
     newGuestMemberIds.push(newId);
 
-    if (typeof gItem === 'object' && gItem?.paidImmediately) {
+    if (typeof gItem === 'object' && gItem?.paidImmediately === true) {
       paidImmediatelySet.add(newId);
     }
   });
@@ -1020,8 +1081,6 @@ function buildDrinkingSplitRows(params: {
         ? [{ member_id: payerId, kind: 'BILL', item_name: 'Hóa đơn quán', amount: totalAmountFallback }]
         : [];
 
-  const split = calculateDrinkingSplit(attendeeIds, normalizedItems, roundingUnit);
-
   const itemsToSave: SessionItem[] = normalizedItems.map((it, idx) => ({
     item_id: generateEntityId('ITM', String(idx)),
     session_id: sessionId,
@@ -1033,6 +1092,7 @@ function buildDrinkingSplitRows(params: {
   }));
 
   const primaryPayerId = resolvePrimaryDrinkingPayer(itemsToSave, payerId);
+  const split = calculateDrinkingSplit(attendeeIds, normalizedItems, roundingUnit, primaryPayerId);
 
   const attendanceRows: Attendance[] = split.splits.map((sp, idx) => {
     const member = membersMap.get(sp.memberId);
@@ -1229,7 +1289,16 @@ export function planCreateSession(
   if (guestRes.createdMembers.length > 0) {
     upserts.members = guestRes.createdMembers.map((m) => ({
       id: m.member_id,
-      data: m as unknown as Record<string, unknown>,
+      data: toPublicMemberRecord(m, false) as unknown as Record<string, unknown>,
+    }));
+    upserts.members_private = guestRes.createdMembers.map((m) => ({
+      id: m.member_id,
+      data: {
+        member_id: m.member_id,
+        phone: '',
+        email: '',
+        updated_at: now,
+      },
     }));
   }
   if (attendanceRows.length > 0) {
@@ -1287,18 +1356,23 @@ export function planUpdateSession(
 
   const now = nowIsoVN();
   const settings = dataset.settings;
-  const sessionType = payload.type || oldSession.type;
+  const sessionTypeRaw = String(payload.type || oldSession.type).trim().toUpperCase();
+  if (sessionTypeRaw !== 'BADMINTON' && sessionTypeRaw !== 'DRINKING') {
+    throw new ApiClientError('BAD_REQUEST', 'type phải là BADMINTON hoặc DRINKING.', 400);
+  }
+  const sessionType = sessionTypeRaw as Session['type'];
   const dateStr = String(payload.date || oldSession.date).trim();
   const title = String(payload.title || oldSession.title).trim();
-  const guestFee = Math.max(0, Math.round(Number(payload.guestFee ?? oldSession.guest_fee ?? settings.guest_fee) || 0));
-  const treasurerId = settings.treasurer_member_id;
-  const payerId = String(payload.payerId || oldSession.payer_id || treasurerId || '').trim();
   const billingMode =
     sessionType === 'BADMINTON'
       ? (payload.billingMode || oldSession.billing_mode || 'MONTHLY') === 'AD_HOC'
         ? 'AD_HOC'
         : 'MONTHLY'
       : undefined;
+  const guestFeeFallback = oldSession.guest_fee > 0 ? oldSession.guest_fee : settings.guest_fee;
+  const guestFee = Math.max(0, Math.round(Number(payload.guestFee ?? guestFeeFallback) || 0));
+  const treasurerId = settings.treasurer_member_id;
+  const payerId = String(payload.payerId || oldSession.payer_id || treasurerId || '').trim();
 
   if (hasSettledAttendance) {
     const oldAttendeeIds = Array.from(new Set(oldAttendances.map((a) => a.member_id))).sort();
@@ -1323,7 +1397,7 @@ export function planUpdateSession(
     const sameGuestFee =
       sessionType !== 'BADMINTON' ||
       billingMode !== 'MONTHLY' ||
-      guestFee === (oldSession.guest_fee ?? settings.guest_fee);
+      guestFee === (oldSession.guest_fee > 0 ? oldSession.guest_fee : settings.guest_fee);
 
     let sameDrinkingItems = true;
     if (sessionType === 'DRINKING' && payload.items !== undefined) {
@@ -1409,58 +1483,60 @@ export function planUpdateSession(
   const unit = settings.rounding_unit || 1000;
 
   if (sessionType === 'BADMINTON') {
+    for (const mId of attendeeIds) {
+      if (!membersMap.has(mId)) {
+        throw new ApiClientError('NOT_FOUND', `Không tìm thấy thành viên ${mId}`, 404);
+      }
+    }
     if (billingMode === 'AD_HOC') {
       perPerson = calculateAdhocPerPerson(totalAmount, attendeeIds.length, unit);
-      attendanceRows = attendeeIds
-        .filter((mId) => membersMap.has(mId))
-        .map((mId, idx) => {
-          const member = membersMap.get(mId)!;
-          const isPaid = mId === payerId || guestRes.paidImmediatelySet.has(mId) || perPerson === 0;
-          return {
-            attendance_id: generateEntityId('ATT', `U_${idx}`),
-            session_id: sessionId,
-            session_date: dateStr,
-            session_type: 'BADMINTON',
-            member_id: mId,
-            member_name: member.name,
-            member_type_snapshot: member.type === 'GUEST' ? 'GUEST' : 'MAIN',
-            fee_amount: perPerson,
-            creditor_id: payerId,
-            contributed_amount: 0,
-            net_amount: isPaid ? 0 : perPerson,
-            is_paid: isPaid,
-            paid_at: isPaid ? now : '',
-            settlement_id: '',
-            note: '',
-          };
-        });
+      attendanceRows = attendeeIds.map((mId, idx) => {
+        const member = membersMap.get(mId)!;
+        const isPaid = mId === payerId || guestRes.paidImmediatelySet.has(mId) || perPerson === 0;
+        return {
+          attendance_id: generateEntityId('ATT', `U_${idx}`),
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_name: member.name,
+          member_type_snapshot: member.type === 'GUEST' ? 'GUEST' : 'MAIN',
+          fee_amount: perPerson,
+          creditor_id: payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : perPerson,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: '',
+        };
+      });
     } else {
-      attendanceRows = attendeeIds
-        .filter((mId) => membersMap.has(mId))
-        .map((mId, idx) => {
-          const member = membersMap.get(mId)!;
-          const mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
-          const fee = mType === 'GUEST' ? guestFee : 0;
-          const isPaid = mType === 'MAIN' || guestRes.paidImmediatelySet.has(mId) || fee === 0;
-          return {
-            attendance_id: generateEntityId('ATT', `U_${idx}`),
-            session_id: sessionId,
-            session_date: dateStr,
-            session_type: 'BADMINTON',
-            member_id: mId,
-            member_name: member.name,
-            member_type_snapshot: mType,
-            fee_amount: fee,
-            creditor_id: treasurerId || payerId,
-            contributed_amount: 0,
-            net_amount: isPaid ? 0 : fee,
-            is_paid: isPaid,
-            paid_at: isPaid ? now : '',
-            settlement_id: '',
-            note: '',
-          };
-        });
+      attendanceRows = attendeeIds.map((mId, idx) => {
+        const member = membersMap.get(mId)!;
+        const mType = member.type === 'GUEST' ? 'GUEST' : 'MAIN';
+        const fee = mType === 'GUEST' ? guestFee : 0;
+        const isPaid = mType === 'MAIN' || guestRes.paidImmediatelySet.has(mId) || fee === 0;
+        return {
+          attendance_id: generateEntityId('ATT', `U_${idx}`),
+          session_id: sessionId,
+          session_date: dateStr,
+          session_type: 'BADMINTON',
+          member_id: mId,
+          member_name: member.name,
+          member_type_snapshot: mType,
+          fee_amount: fee,
+          creditor_id: treasurerId || payerId,
+          contributed_amount: 0,
+          net_amount: isPaid ? 0 : fee,
+          is_paid: isPaid,
+          paid_at: isPaid ? now : '',
+          settlement_id: '',
+          note: '',
+        };
+      });
     }
+    attendeeCount = attendanceRows.length;
   } else {
     const split = buildDrinkingSplitRows({
       sessionId,
@@ -1482,6 +1558,19 @@ export function planUpdateSession(
     attendanceRows = split.attendanceRows;
     itemsToSave = split.itemsToSave;
     resolvedDrinkPayerId = split.primaryPayerId;
+  }
+
+  let nextPlanId =
+    sessionType === 'BADMINTON' && billingMode !== 'AD_HOC'
+      ? payload.planId !== undefined
+        ? String(payload.planId || '').trim()
+        : oldSession.plan_id
+      : '';
+  if (sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' && !nextPlanId) {
+    const matchedPlan = dataset.schedule.find(
+      (d) => d.date === dateStr && d.status !== 'CANCELLED'
+    );
+    if (matchedPlan) nextPlanId = matchedPlan.plan_id;
   }
 
   const resolvedPayerId =
@@ -1527,7 +1616,7 @@ export function planUpdateSession(
         : '',
     venue_type: sessionType === 'DRINKING' ? payload.venueType || oldSession.venue_type || 'RESTAURANT' : '',
     billing_mode: billingMode,
-    plan_id: payload.planId !== undefined ? payload.planId : oldSession.plan_id,
+    plan_id: nextPlanId,
     updated_at: now,
   };
 
@@ -1537,7 +1626,16 @@ export function planUpdateSession(
   if (guestRes.createdMembers.length > 0) {
     upserts.members = guestRes.createdMembers.map((m) => ({
       id: m.member_id,
-      data: m as unknown as Record<string, unknown>,
+      data: toPublicMemberRecord(m, false) as unknown as Record<string, unknown>,
+    }));
+    upserts.members_private = guestRes.createdMembers.map((m) => ({
+      id: m.member_id,
+      data: {
+        member_id: m.member_id,
+        phone: '',
+        email: '',
+        updated_at: now,
+      },
     }));
   }
   if (attendanceRows.length > 0) {
@@ -1551,6 +1649,44 @@ export function planUpdateSession(
       id: it.item_id,
       data: it as unknown as Record<string, unknown>,
     }));
+  }
+
+  const scheduleUpdates: MutationUpsertItem[] = [];
+  if (oldSession.plan_id && oldSession.plan_id !== nextPlanId) {
+    const oldPlan = dataset.schedule.find((d) => d.plan_id === oldSession.plan_id);
+    if (oldPlan && (!oldPlan.session_id || oldPlan.session_id === sessionId)) {
+      const resetOldPlan: ScheduleDay & { month?: string } = {
+        ...oldPlan,
+        status: 'PLANNED',
+        session_id: '',
+        updated_at: now,
+        month: oldPlan.date.slice(0, 7),
+      };
+      scheduleUpdates.push({
+        id: oldPlan.plan_id,
+        data: resetOldPlan as unknown as Record<string, unknown>,
+      });
+    }
+  }
+  if (nextPlanId) {
+    const nextPlan = dataset.schedule.find((d) => d.plan_id === nextPlanId);
+    if (nextPlan) {
+      const doneNextPlan: ScheduleDay & { month?: string } = {
+        ...nextPlan,
+        status: 'DONE',
+        session_id: sessionId,
+        planned_member_ids: attendeeIds.join(','),
+        updated_at: now,
+        month: nextPlan.date.slice(0, 7),
+      };
+      scheduleUpdates.push({
+        id: nextPlanId,
+        data: doneNextPlan as unknown as Record<string, unknown>,
+      });
+    }
+  }
+  if (scheduleUpdates.length > 0) {
+    upserts.schedule = scheduleUpdates;
   }
 
   return {
@@ -1583,7 +1719,7 @@ export function planDeleteSession(
   const upserts: Partial<Record<CollectionKey, MutationUpsertItem[]>> = {};
   if (target.plan_id) {
     const plan = dataset.schedule.find((d) => d.plan_id === target.plan_id);
-    if (plan) {
+    if (plan && (!plan.session_id || plan.session_id === sessionId)) {
       const resetPlan: ScheduleDay & { month?: string } = {
         ...plan,
         status: 'PLANNED',
@@ -1693,11 +1829,15 @@ export function planConfirmPayment(
   const now = nowIsoVN();
   const settlementId = generateEntityId('SET');
   const membersMap = buildMembersMap(dataset.members);
-  const category = payload.category || 'DRINKING';
-  const mode = payload.mode || (category === 'BADMINTON' ? 'ITEMS' : 'SIMPLIFIED_TRANSFER');
+  const category = String(payload.category || 'DRINKING').trim().toUpperCase();
+  const mode = String(
+    payload.mode || (category === 'BADMINTON' ? 'ITEMS' : 'SIMPLIFIED_TRANSFER')
+  )
+    .trim()
+    .toUpperCase();
 
   if (category === 'BADMINTON') {
-    const setIds = new Set(payload.attendanceIds || []);
+    const setIds = new Set((payload.attendanceIds || []).map((id) => String(id).trim()).filter(Boolean));
     let paidSum = 0;
     const updatedAtts: Attendance[] = [];
 
@@ -1714,6 +1854,16 @@ export function planConfirmPayment(
       }
     }
 
+    if (updatedAtts.length === 0) {
+      throw new ApiClientError(
+        'CONFLICT_LOCK',
+        'Các khoản này đã được thanh toán trước đó hoặc không có khoản nợ hợp lệ để gạch nợ.',
+        409
+      );
+    }
+
+    const updatedAttIds = updatedAtts.map((a) => a.attendance_id);
+
     const settlement: Settlement = {
       settlement_id: settlementId,
       from_member_id: payload.fromMemberId,
@@ -1724,7 +1874,7 @@ export function planConfirmPayment(
       settled_at: now,
       method: payload.method || 'VIETQR',
       category: 'BADMINTON',
-      source_attendance_ids: (payload.attendanceIds || []).join(','),
+      source_attendance_ids: updatedAttIds.join(','),
       source_ledger_ids: '',
       is_reconciled: true,
       transfer_content: payload.transferContent || '',
@@ -1752,24 +1902,38 @@ export function planConfirmPayment(
 
   // DRINKING
   if (mode === 'ITEMS') {
-    const setIds = new Set(payload.attendanceIds || []);
+    const setIds = new Set((payload.attendanceIds || []).map((id) => String(id).trim()).filter(Boolean));
     let totalPaid = 0;
     const affectedSessionIds = new Set<string>();
+    const paidDebtorIds: string[] = [];
 
     for (const a of dataset.attendance) {
-      if (a.session_type === 'DRINKING' && setIds.has(a.attendance_id) && !a.is_paid) {
-        totalPaid += Math.abs(Math.round(Number(a.net_amount) || Number(a.fee_amount) || 0));
+      const rawNet = Math.round(Number(a.net_amount) || 0);
+      const fallbackFee = rawNet === 0 ? Math.round(Number(a.fee_amount) || 0) : 0;
+      const payableAmt = rawNet > 0 ? rawNet : fallbackFee;
+      if (a.session_type === 'DRINKING' && setIds.has(a.attendance_id) && !a.is_paid && payableAmt > 0) {
+        totalPaid += payableAmt;
+        paidDebtorIds.push(a.attendance_id);
         if (a.session_id) affectedSessionIds.add(a.session_id);
       }
     }
 
+    if (paidDebtorIds.length === 0) {
+      throw new ApiClientError(
+        'CONFLICT_LOCK',
+        'Các khoản này đã được thanh toán trước đó hoặc không phải khoản nợ hợp lệ.',
+        409
+      );
+    }
+
+    const validDebtorSet = new Set(paidDebtorIds);
     const updatedAtts: Attendance[] = [];
     for (const sid of affectedSessionIds) {
       const sessRows = dataset.attendance.filter((a) => a.session_id === sid && a.session_type === 'DRINKING');
       const nextSessRows = applyDrinkingItemsPaymentToRows(
         sessRows,
         sid,
-        setIds,
+        validDebtorSet,
         payload.toMemberId,
         settlementId,
         now
@@ -1798,7 +1962,7 @@ export function planConfirmPayment(
       settled_at: now,
       method: payload.method || 'VIETQR',
       category: 'DRINKING',
-      source_attendance_ids: (payload.attendanceIds || []).join(','),
+      source_attendance_ids: paidDebtorIds.join(','),
       source_ledger_ids: '',
       is_reconciled: true,
       transfer_content: payload.transferContent || '',
@@ -1870,7 +2034,7 @@ export function planConfirmPayment(
         settlement_id: settlementId,
       }));
     const batchRaw = nextDataset.settlements.filter(
-      (s) => (!s.category || s.category === 'DRINKING') && !s.is_reconciled
+      (s) => (!s.category || String(s.category).trim().toUpperCase() === 'DRINKING') && !s.is_reconciled
     );
     const encodedBatch = encodeReconciledIds(batchRaw.map((s) => s.settlement_id));
     const reconciledSettlements: Settlement[] = batchRaw.map((s) => ({
@@ -2000,7 +2164,7 @@ export function planUndoSettlement(
         .filter(
           (s) =>
             s.settlement_id !== settlementId &&
-            (!s.category || s.category === 'DRINKING') &&
+            (!s.category || String(s.category).trim().toUpperCase() === 'DRINKING') &&
             String(s.source_attendance_ids || '').trim() !== ''
         )
         .sort((a, b) => (a.settled_at || '').localeCompare(b.settled_at || ''));
@@ -2294,7 +2458,7 @@ export function planIssueMonthlyBill(
     membersMap,
     now
   );
-  const courtFee = Math.max(0, Math.round(Number(payload.courtFee ?? payload.estimate) || 0));
+  const courtFee = Math.max(0, Math.round(Number(payload.courtFee ?? 0) || 0));
   const shuttleTubeQty = Math.max(0, Number(payload.shuttleTubeQty) || 0);
   const shuttleTubePrice = Math.max(0, Math.round(Number(payload.shuttleTubePrice) || 0));
   const shuttleTubeAmount =
@@ -2302,16 +2466,20 @@ export function planIssueMonthlyBill(
       ? Math.max(0, Math.round(Number(payload.shuttleTubeAmount) || 0))
       : Math.round(shuttleTubeQty * shuttleTubePrice);
   const prevOvertimeFee = Math.max(0, Math.round(Number(payload.prevOvertimeFee) || 0));
+  const hasExplicitEstimate =
+    payload.estimate !== undefined &&
+    payload.estimate !== null &&
+    String(payload.estimate).trim() !== '';
 
-  const detailed = calculateDetailedMonthlyBill({
+  const previewCalc = calculateDetailedMonthlyBill({
     courtFee,
     shuttleTubeQty,
     shuttleTubePrice,
     shuttleAmountOverride: payload.shuttleTubeAmount !== undefined,
     manualShuttleAmount: shuttleTubeAmount,
     prevOvertimeFee,
-    venueTotalOverride: true,
-    manualVenueTotal: payload.estimate,
+    venueTotalOverride: hasExplicitEstimate,
+    manualVenueTotal: hasExplicitEstimate ? payload.estimate : undefined,
     carryIn,
     memberIds,
     appliedCredits,
@@ -2320,12 +2488,52 @@ export function planIssueMonthlyBill(
     guestIncome: current.bill.guest_income,
   });
 
+  const existingBill = dataset.monthly_bills.find((b) => b.month === targetMonth);
+  const hasExistingOverride =
+    existingBill &&
+    existingBill.actual_cost_override !== null &&
+    existingBill.actual_cost_override !== undefined &&
+    String(existingBill.actual_cost_override) !== '';
+  const existingActualOverride = hasExistingOverride
+    ? Number(existingBill.actual_cost_override)
+    : null;
+  const nextIsProjected =
+    existingActualOverride === null &&
+    previewCalc.venueTotal > 0 &&
+    (current.bill.logged_sessions_cost ?? 0) < previewCalc.venueTotal;
+  const nextActualCost =
+    existingActualOverride !== null
+      ? existingActualOverride
+      : nextIsProjected
+        ? previewCalc.venueTotal
+        : (current.bill.logged_sessions_cost ?? 0);
+
+  const detailed = calculateDetailedMonthlyBill({
+    courtFee,
+    shuttleTubeQty,
+    shuttleTubePrice,
+    shuttleAmountOverride: payload.shuttleTubeAmount !== undefined,
+    manualShuttleAmount: shuttleTubeAmount,
+    prevOvertimeFee,
+    venueTotalOverride: hasExplicitEstimate,
+    manualVenueTotal: hasExplicitEstimate ? payload.estimate : undefined,
+    carryIn,
+    memberIds,
+    appliedCredits,
+    roundingUnit: dataset.settings.rounding_unit,
+    actualCost: nextActualCost,
+    guestIncome: current.bill.guest_income,
+  });
+
   const existingDues = dataset.monthly_dues.filter((d) => d.month === targetMonth);
+  const oldDueByMember = new Map(existingDues.map((d) => [d.member_id, d]));
   const oldPaidMap = new Map(
     existingDues.filter((d) => d.is_paid).map((d) => [d.member_id, d])
   );
+  const todayDate = now.slice(0, 10);
 
   const nextDues: MonthlyDue[] = detailed.memberDues.map((line, i) => {
+    const oldDue = oldDueByMember.get(line.memberId);
     const oldPaid = oldPaidMap.get(line.memberId);
     const oldPaidAmount = oldPaid ? Math.round(Number(oldPaid.amount) || 0) : 0;
     const isExactMatch = Boolean(oldPaid && (oldPaidAmount === line.netAmount || line.netAmount === 0));
@@ -2348,6 +2556,7 @@ export function planIssueMonthlyBill(
       base_amount: line.baseAmount,
       credit_amount: line.creditAmount,
       credit_note: creditNote,
+      issued_at: oldDue?.issued_at || todayDate,
       is_paid: isPaid,
       paid_at: isExactMatch ? oldPaid?.paid_at || now : line.netAmount === 0 ? now : '',
       confirmed_by: isExactMatch
@@ -2372,7 +2581,6 @@ export function planIssueMonthlyBill(
     created_at: now,
   }));
 
-  const existingBill = dataset.monthly_bills.find((b) => b.month === targetMonth);
   const nextBill: MonthlyBill = {
     month: targetMonth,
     estimate: detailed.venueTotal,
@@ -2473,7 +2681,7 @@ export function planIssueMonthlyBill(
   if (updatedMembers.length > 0) {
     upserts.members = updatedMembers.map((m) => ({
       id: m.member_id,
-      data: m as unknown as Record<string, unknown>,
+      data: toPublicMemberRecord(m) as unknown as Record<string, unknown>,
     }));
   }
   if (scheduleUpserts.length > 0) {
@@ -2508,18 +2716,20 @@ export function planSaveMonthlyContributions(
 
   const existing = dataset.monthly_bills.find((b) => b.month === targetMonth);
   const current = buildMonthlyBillData(dataset, targetMonth);
-  const nextBill: MonthlyBill = existing
-    ? {
-        ...existing,
-        shuttle_contributions: serialized,
-        updated_at: now,
-      }
-    : {
-        ...current.bill,
-        created_by: editorEmail,
-        updated_at: now,
-        shuttle_contributions: serialized,
-      };
+  const nextBill: MonthlyBill = stripTransientMonthlyBillFields(
+    existing
+      ? {
+          ...existing,
+          shuttle_contributions: serialized,
+          updated_at: now,
+        }
+      : {
+          ...current.bill,
+          created_by: editorEmail,
+          updated_at: now,
+          shuttle_contributions: serialized,
+        }
+  );
 
   const plan: BatchMutationPlan<MonthlyBillData> = {
     upserts: {
@@ -2594,9 +2804,12 @@ export function planCloseMonth(
   const hasCarryOutOverride =
     payload.carryOutOverride !== undefined &&
     payload.carryOutOverride !== null &&
+    String(payload.carryOutOverride).trim() !== '' &&
     Number.isFinite(Number(payload.carryOutOverride));
   const hasActualOverride =
-    payload.actualCostOverride !== undefined && payload.actualCostOverride !== null;
+    payload.actualCostOverride !== undefined &&
+    payload.actualCostOverride !== null &&
+    String(payload.actualCostOverride).trim() !== '';
   const actualCostOverride = hasActualOverride
     ? Math.max(0, Math.round(Number(payload.actualCostOverride) || 0))
     : null;
@@ -2626,7 +2839,7 @@ export function planCloseMonth(
   const now = nowIsoVN();
   const nextBillDetailStr = Object.keys(parsedDetail).length > 0 ? JSON.stringify(parsedDetail) : '';
 
-  const closedBill: MonthlyBill = {
+  const closedBill: MonthlyBill = stripTransientMonthlyBillFields({
     ...(existing || current.bill),
     actual_cost: actualCost,
     actual_cost_override: nextActualCostOverride,
@@ -2637,7 +2850,7 @@ export function planCloseMonth(
     created_by: existing?.created_by || current.bill.created_by || editorEmail,
     closed_at: now,
     updated_at: now,
-  };
+  });
 
   const plan: BatchMutationPlan<MonthlyBillData> = {
     upserts: {
@@ -2665,7 +2878,14 @@ export function planLinkMemberEmail(
   if (!target) {
     throw new ApiClientError('NOT_FOUND', `Không tìm thấy thành viên ${cleanId}`, 404);
   }
-  const currentTargetEmail = String(target.email || '').trim().toLowerCase();
+  const privByMemberId = new Map<string, MemberPrivateRecord>(
+    (dataset.members_private || []).map((p) => [p.member_id, p])
+  );
+  const currentTargetEmail = String(
+    privByMemberId.get(cleanId)?.email ?? target.email ?? ''
+  )
+    .trim()
+    .toLowerCase();
   if (currentTargetEmail && currentTargetEmail !== email) {
     throw new ApiClientError(
       'BAD_REQUEST',
@@ -2675,25 +2895,50 @@ export function planLinkMemberEmail(
   }
 
   const now = nowIsoVN();
-  const updates: MutationUpsertItem[] = [];
+  const memberUpdates: MutationUpsertItem[] = [];
+  const privateUpdates: MutationUpsertItem[] = [];
 
   // Gỡ liên kết cũ của chính userEmail nếu trước đó gắn nhầm thành viên khác
   for (const m of dataset.members) {
-    if (String(m.email || '').trim().toLowerCase() === email && m.member_id !== cleanId) {
-      updates.push({
+    const mPriv = privByMemberId.get(m.member_id);
+    const mEmail = String(mPriv?.email ?? m.email ?? '').trim().toLowerCase();
+    if (mEmail === email && m.member_id !== cleanId) {
+      memberUpdates.push({
         id: m.member_id,
-        data: { ...m, email: '', updated_at: now } as unknown as Record<string, unknown>,
+        data: toPublicMemberRecord(m, false) as unknown as Record<string, unknown>,
+      });
+      privateUpdates.push({
+        id: m.member_id,
+        data: {
+          member_id: m.member_id,
+          phone: mPriv?.phone ?? m.phone ?? '',
+          email: '',
+          updated_at: now,
+        },
       });
     }
   }
 
-  updates.push({
+  const targetPriv = privByMemberId.get(cleanId);
+  memberUpdates.push({
     id: target.member_id,
-    data: { ...target, email, updated_at: now } as unknown as Record<string, unknown>,
+    data: toPublicMemberRecord(target, true) as unknown as Record<string, unknown>,
+  });
+  privateUpdates.push({
+    id: target.member_id,
+    data: {
+      member_id: target.member_id,
+      phone: targetPriv?.phone ?? target.phone ?? '',
+      email,
+      updated_at: now,
+    },
   });
 
   return {
-    upserts: { members: updates },
+    upserts: {
+      members: memberUpdates,
+      members_private: privateUpdates,
+    },
     deletes: {},
     result: { linkedMemberId: cleanId, email },
   };
@@ -2713,23 +2958,38 @@ export function planUpsertMember(
   const memberId = String(payload.memberId || '').trim();
 
   if (!memberId) {
+    const phone = String(payload.phone || '').trim();
     const member: Member = {
       member_id: generateEntityId('MEM'),
       name,
       aliases: String(payload.aliases || '').trim(),
       type,
-      phone: String(payload.phone || '').trim(),
+      phone,
       bank_bin: String(payload.bankBin || '').trim(),
       bank_name: String(payload.bankName || '').trim(),
       account_no: String(payload.accountNo || '').trim(),
       account_name: String(payload.accountName || '').trim().toUpperCase(),
       email: '',
+      has_email: false,
       is_active: payload.isActive ?? true,
       created_at: now,
       updated_at: now,
     };
     return {
-      upserts: { members: [{ id: member.member_id, data: member as unknown as Record<string, unknown> }] },
+      upserts: {
+        members: [{ id: member.member_id, data: toPublicMemberRecord(member, false) as unknown as Record<string, unknown> }],
+        members_private: [
+          {
+            id: member.member_id,
+            data: {
+              member_id: member.member_id,
+              phone,
+              email: '',
+              updated_at: now,
+            },
+          },
+        ],
+      },
       deletes: {},
       result: { member },
     };
@@ -2739,13 +2999,21 @@ export function planUpsertMember(
   if (!existing) {
     throw new ApiClientError('NOT_FOUND', `Không tìm thấy thành viên ${memberId}`, 404);
   }
+  const existingPriv = (dataset.members_private || []).find((p) => p.member_id === memberId);
+  const preservedEmail = String(existingPriv?.email ?? existing.email ?? '').trim().toLowerCase();
+  const nextPhone =
+    payload.phone !== undefined
+      ? String(payload.phone).trim()
+      : String(existingPriv?.phone ?? existing.phone ?? '').trim();
 
   const updated: Member = {
     ...existing,
     name,
     aliases: payload.aliases !== undefined ? String(payload.aliases).trim() : existing.aliases,
     type,
-    phone: payload.phone !== undefined ? String(payload.phone).trim() : existing.phone,
+    phone: nextPhone,
+    email: preservedEmail,
+    has_email: Boolean(preservedEmail || existing.has_email),
     bank_bin: payload.bankBin !== undefined ? String(payload.bankBin).trim() : existing.bank_bin,
     bank_name: payload.bankName !== undefined ? String(payload.bankName).trim() : existing.bank_name,
     account_no: payload.accountNo !== undefined ? String(payload.accountNo).trim() : existing.account_no,
@@ -2758,7 +3026,20 @@ export function planUpsertMember(
   };
 
   return {
-    upserts: { members: [{ id: updated.member_id, data: updated as unknown as Record<string, unknown> }] },
+    upserts: {
+      members: [{ id: updated.member_id, data: toPublicMemberRecord(updated, Boolean(preservedEmail || existing.has_email)) as unknown as Record<string, unknown> }],
+      members_private: [
+        {
+          id: updated.member_id,
+          data: {
+            member_id: updated.member_id,
+            phone: nextPhone,
+            email: preservedEmail,
+            updated_at: now,
+          },
+        },
+      ],
+    },
     deletes: {},
     result: { member: updated },
   };

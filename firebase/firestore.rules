@@ -2,7 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email != null;
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true;
     }
 
     function userEmail() {
@@ -33,13 +35,23 @@ service cloud.firestore {
     match /monthly_dues/{id} { allow read: if true; allow write: if isEditor(); }
     match /settlements/{id} { allow read: if true; allow write: if isEditor(); }
     match /settings/{id} { allow read: if true; allow write: if isEditor(); }
-    match /fund_ledger/{id} { allow read: if true; allow write: if isAdmin(); }
     match /_meta/{id} { allow read: if true; allow write: if isEditor(); }
 
-    // Viewer đọc công khai; Editor sửa toàn bộ; Member thường chỉ tự link/unlink email của chính mình
+    // Thông tin công khai cho App & VietQR (KHÔNG chứa phone/email)
     match /members/{memberId} {
       allow read: if true;
-      allow create, delete: if isEditor();
+      allow write: if isEditor();
+    }
+
+    // Vùng riêng tư: chỉ Editor đọc/ghi toàn bộ; Member đã xác minh email chỉ đọc/tự link email của mình
+    match /members_private/{memberId} {
+      allow read: if isEditor() || (isSignedIn() && resource.data.email == userEmail());
+      allow create: if isEditor() || (
+        isSignedIn()
+        && request.resource.data.keys().hasOnly(['member_id', 'email', 'updated_at'])
+        && request.resource.data.member_id == memberId
+        && request.resource.data.email == userEmail()
+      );
       allow update: if isEditor() || (
         isSignedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'updated_at'])
@@ -48,6 +60,7 @@ service cloud.firestore {
           || (resource.data.email == userEmail() && request.resource.data.email == '')
         )
       );
+      allow delete: if isEditor();
     }
 
     // Bảo vệ danh sách editors: user thường chỉ get được doc của chính email mình

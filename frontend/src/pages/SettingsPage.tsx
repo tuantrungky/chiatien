@@ -22,11 +22,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import {
   fetchEditors,
+  fetchMembersPrivate,
   manageEditors,
   updateSettings,
   upsertMember,
   type DbProviderMode,
 } from '../services/api';
+import { migrateMembersPrivateOnFirestore } from '../services/providers/firebaseProvider';
 import {
   getActiveProviderDisplayName,
   getProviderCapabilities,
@@ -63,6 +65,27 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
   const [syncMeta, setSyncMeta] = useState<SyncMetaState | null>(null);
   const [sheetExportedAt, setSheetExportedAt] = useState<string>('');
   const [comparisons, setComparisons] = useState<TableCountComparison[]>([]);
+  const [privateByMemberId, setPrivateByMemberId] = useState<
+    Record<string, { phone: string; email: string }>
+  >({});
+
+  const loadMembersPrivate = useCallback(async () => {
+    if (!idToken) return;
+    try {
+      const list = await fetchMembersPrivate(idToken);
+      const map: Record<string, { phone: string; email: string }> = {};
+      for (const item of list) {
+        map[item.member_id] = { phone: item.phone || '', email: item.email || '' };
+      }
+      setPrivateByMemberId(map);
+    } catch {
+      // Ignore transient errors; public member fields still render
+    }
+  }, [idToken]);
+
+  useEffect(() => {
+    void loadMembersPrivate();
+  }, [loadMembersPrivate, members]);
 
   useEffect(() => {
     return subscribeProviderMode(() => {
@@ -151,11 +174,12 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
   };
 
   const openEditMemberForm = (m: Member) => {
+    const priv = privateByMemberId[m.member_id];
     setEditingMemberId(m.member_id);
     setMName(m.name);
     setMAliases(m.aliases);
     setMType(m.type);
-    setMPhone(m.phone);
+    setMPhone(priv?.phone ?? m.phone ?? '');
     setMBankBin(m.bank_bin);
     setMBankName(m.bank_name);
     setMAccountNo(m.account_no);
@@ -203,7 +227,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
       setShowMemberForm(false);
       setSuccessMsg(`Đã lưu thông tin thành viên ${res.member.name}.`);
       toast.success(`Đã lưu thông tin thành viên ${res.member.name}.`);
-      await onRefreshAll();
+      await Promise.all([onRefreshAll(), loadMembersPrivate()]);
     } catch (err) {
       setErrorMsg(handleApiError(err));
     } finally {
@@ -216,12 +240,13 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     setBusy(true);
     setErrorMsg(null);
     try {
+      const priv = privateByMemberId[m.member_id];
       await upsertMember(idToken, {
         memberId: m.member_id,
         name: m.name,
         aliases: m.aliases,
         type: 'MAIN',
-        phone: m.phone,
+        phone: priv?.phone ?? m.phone ?? '',
         bankBin: m.bank_bin,
         bankName: m.bank_name,
         accountNo: m.account_no,
@@ -370,7 +395,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     if (!isAdmin || syncLoading) return;
     if (
       !window.confirm(
-        'Xác nhận KÉO dữ liệu từ Google Sheets sang Firebase?\n\nDữ liệu hiện tại trên Firestore sẽ được cập nhật khớp hoàn toàn với 11 tab trên Google Sheets.'
+        'Xác nhận KÉO dữ liệu từ Google Sheets sang Firebase?\n\nDữ liệu hiện tại trên Firestore sẽ được cập nhật khớp hoàn toàn với 10 tab trên Google Sheets (tự tách SĐT/Email sang members_private).'
       )
     ) {
       return;
@@ -401,7 +426,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     if (!isAdmin || syncLoading) return;
     if (
       !window.confirm(
-        'Xác nhận SAO LƯU dữ liệu từ Firebase sang Google Sheets?\n\nNội dung 11 tab trên Google Sheets sẽ được ghi đè theo bản mới nhất trên Cloud Firestore.'
+        'Xác nhận SAO LƯU dữ liệu từ Firebase sang Google Sheets?\n\nNội dung 10 tab trên Google Sheets sẽ được ghi đè theo bản mới nhất trên Cloud Firestore.'
       )
     ) {
       return;
@@ -419,6 +444,36 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
       setSuccessMsg(`Đã sao lưu thành công ${totalRows} bản ghi từ Firebase sang Google Sheets.`);
       toast.success('Đẩy dữ liệu Firebase → Sheet thành công!');
       await handleCompareDatabases();
+    } catch (err) {
+      setErrorMsg(handleApiError(err));
+    } finally {
+      setSyncLoading(false);
+      setSyncProgressText(null);
+    }
+  };
+
+  const handleMigratePrivacyOnFirestore = async () => {
+    if (!isAdmin || syncLoading || !capabilities.firebaseReady) return;
+    if (
+      !window.confirm(
+        'Xác nhận tách toàn bộ SĐT & Email từ collection members sang members_private trên Firestore?\n\nThao tác này an toàn (idempotent), giúp ẩn SĐT/Email khỏi Viewer công khai trước khi bạn publish firestore.rules mới.'
+      )
+    ) {
+      return;
+    }
+    const token = (await getFreshIdToken()) || idToken;
+    if (!token || !editor?.email) return;
+    setSyncLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setSyncProgressText('Đang tách SĐT & Email sang members_private trên Firestore...');
+    try {
+      const res = await migrateMembersPrivateOnFirestore(editor.email);
+      setSuccessMsg(
+        `Đã tách riêng tư xong (${res.migrated} bản ghi private, dọn ${res.cleaned} hồ sơ công khai). Bạn có thể publish firestore.rules mới ngay bây giờ.`
+      );
+      toast.success('Đã tách SĐT/Email sang vùng riêng tư!');
+      await Promise.all([onRefreshAll(), loadMembersPrivate()]);
     } catch (err) {
       setErrorMsg(handleApiError(err));
     } finally {
@@ -633,6 +688,9 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
           <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 shadow-xs overflow-hidden">
             {members.map((m) => {
               const isTreasurer = m.member_id === settings.treasurer_member_id;
+              const priv = privateByMemberId[m.member_id];
+              const displayPhone = priv?.phone ?? m.phone ?? '';
+              const displayEmail = priv?.email ?? m.email ?? '';
               return (
                 <div
                   key={m.member_id}
@@ -658,7 +716,12 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                         </span>
                       )}
                     </div>
-                    {m.phone && <p className="text-[11px] text-slate-500 mt-0.5">SĐT: {m.phone}</p>}
+                    {displayPhone && (
+                      <p className="text-[11px] text-slate-500 mt-0.5">SĐT: {displayPhone}</p>
+                    )}
+                    {displayEmail && (
+                      <p className="text-[11px] text-slate-400">Email: {displayEmail}</p>
+                    )}
                     {m.bank_name && m.account_no && (
                       <p className="text-[11px] text-slate-500">
                         {m.bank_name} • {m.account_no}
@@ -1041,6 +1104,23 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
                 <span>Push: Firebase → Google Sheet</span>
               </button>
             </div>
+
+            {capabilities.firebaseReady && (
+              <div className="pt-1 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] text-slate-500">
+                  Bảo mật riêng tư: tách SĐT &amp; Email sang <code className="font-mono">members_private</code> để ẩn khỏi Viewer.
+                </p>
+                <button
+                  type="button"
+                  disabled={syncLoading}
+                  onClick={() => void handleMigratePrivacyOnFirestore()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Tách SĐT/Email sang vùng riêng tư</span>
+                </button>
+              </div>
+            )}
 
             {syncMeta && (
               <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-4 gap-y-1 pt-1">

@@ -19,6 +19,7 @@ import type {
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBillData,
   ParseBillAIResponse,
   PeriodType,
@@ -200,6 +201,10 @@ export function upsertMember(
   payload: UpsertMemberPayload
 ): Promise<{ member: Member }> {
   return getActiveProvider().upsertMember(idToken, payload);
+}
+
+export function fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]> {
+  return getActiveProvider().fetchMembersPrivate(idToken);
 }
 
 export function updateSettings(

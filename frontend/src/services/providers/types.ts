@@ -8,13 +8,13 @@ import type {
   CreateSessionPayload,
   CreateSessionResponse,
   Editor,
-  FundLedgerEntry,
   GenerateSchedulePayload,
   GuestStatsData,
   IssueMonthlyBillPayload,
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBill,
   MonthlyBillData,
   MonthlyDue,
@@ -41,6 +41,7 @@ export type DbProviderMode = 'firebase' | 'gas' | 'mock';
 
 export type CollectionKey =
   | 'members'
+  | 'members_private'
   | 'sessions'
   | 'attendance'
   | 'session_items'
@@ -48,7 +49,6 @@ export type CollectionKey =
   | 'monthly_bills'
   | 'monthly_dues'
   | 'settlements'
-  | 'fund_ledger'
   | 'settings'
   | 'editors';
 
@@ -61,7 +61,6 @@ export interface RawClubTables {
   monthly_bills: MonthlyBill[];
   monthly_dues: MonthlyDue[];
   settlements: Settlement[];
-  fund_ledger: FundLedgerEntry[];
   settings: SettingRow[];
   editors: Editor[];
 }
@@ -70,6 +69,7 @@ export interface ClubDataset {
   settings: SettingsMap;
   settingsRows?: SettingRow[];
   members: Member[];
+  members_private?: MemberPrivateRecord[];
   sessions: Session[];
   attendance: Attendance[];
   session_items: SessionItem[];
@@ -78,7 +78,6 @@ export interface ClubDataset {
   monthly_dues: MonthlyDue[];
   settlements: Settlement[];
   editors: Editor[];
-  fund_ledger?: FundLedgerEntry[];
 }
 
 export interface SyncMetaState {
@@ -167,6 +166,7 @@ export interface DataProvider {
   closeMonth(idToken: string, payload: CloseMonthPayload): Promise<MonthlyBillData>;
 
   upsertMember(idToken: string, payload: UpsertMemberPayload): Promise<{ member: Member }>;
+  fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]>;
   updateSettings(idToken: string, payload: UpdateSettingsPayload): Promise<{ settings: SettingsMap }>;
   fetchEditors(idToken: string): Promise<Editor[]>;
   manageEditors(idToken: string, payload: ManageEditorsPayload): Promise<Editor[]>;

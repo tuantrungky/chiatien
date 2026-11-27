@@ -13,6 +13,7 @@ import type {
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBillData,
   ParseBillAIResponse,
   PeriodType,
@@ -272,6 +273,15 @@ export const gasProvider: DataProvider = {
 
   upsertMember(idToken: string, payload: UpsertMemberPayload): Promise<{ member: Member }> {
     return gasPost<{ member: Member }>('upsertMember', idToken, payload);
+  },
+
+  async fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]> {
+    const res = await gasPost<{ membersPrivate: MemberPrivateRecord[] }>(
+      'getMembersPrivate',
+      idToken,
+      {}
+    );
+    return res.membersPrivate || [];
   },
 
   updateSettings(idToken: string, payload: UpdateSettingsPayload): Promise<{ settings: SettingsMap }> {

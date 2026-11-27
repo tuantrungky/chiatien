@@ -51,8 +51,9 @@ Tài liệu này hướng dẫn từng bước thiết lập **Cloud Firestore +
 2. **Pull dữ liệu từ Google Sheets sang Firebase:**
    - Mở web đã deploy, đăng nhập bằng tài khoản **ADMIN** (bấm *Đăng nhập bằng Google*).
    - Vào **Quản trị & Cài đặt** → tab **Database & Sync**.
-   - Bấm nút **Pull: Google Sheet → Firebase**. Hệ thống sẽ kéo sạch toàn bộ 11 tab sang Firestore.
-   - Bấm **So sánh dữ liệu** để xác nhận tất cả 11 bảng có chênh lệch = `0`.
+   - Bấm nút **Pull: Google Sheet → Firebase**. Hệ thống sẽ kéo toàn bộ **10 bảng** sang Firestore (và tự tách `phone`/`email` sang `members_private`).
+   - Bấm **So sánh dữ liệu** để xác nhận tất cả 10 bảng có chênh lệch = `0`.
+   - *(Nếu Firestore đã có dữ liệu chạy trước bản cập nhật bảo mật)* Bấm nút **Tách SĐT/Email sang vùng riêng tư** rồi publish lại [firestore.rules](../firebase/firestore.rules) để ẩn SĐT/Email khỏi Viewer công khai.
 3. **Đối chiếu chéo số liệu:**
    - Ngay trong tab **Database & Sync**, bấm chuyển nguồn cục bộ sang **Firebase** (chỉ ảnh hưởng trình duyệt của bạn).
    - Kiểm tra Tổng quan, Công nợ Cầu lông / Ăn nhậu, Lịch tháng, Tháng cầu — đối chiếu với lúc chọn **Google Sheets** đảm bảo khớp từng đồng.
@@ -64,10 +65,11 @@ Tài liệu này hướng dẫn từng bước thiết lập **Cloud Firestore +
 ---
 
 > **Lưu ý `VITE_USE_MOCK`:** nếu `VITE_USE_MOCK=true`, app luôn chạy Mock và bỏ qua `VITE_DB_PROVIDER`. Trên Vercel phải để `false`.
-> **Quyền riêng tư:** Security Rules hiện cho Viewer đọc công khai `members` (gồm email/SĐT/STK, cần cho VietQR). Xem mục câu hỏi mở trong `AUDIT_CHECKLIST.md`.
+> **Quyền riêng tư (`members_private`):** Security Rules ẩn `phone` và `email` khỏi Viewer công khai (chỉ giữ công khai thông tin ngân hàng cho VietQR); chỉ Editor/Admin hoặc chính thành viên đã xác minh email mới truy cập được `members_private`.
+> **Thứ tự deploy an toàn khi nâng cấp:** (1) Deploy GAS trước → (2) Deploy Frontend → (3) Admin chạy **Tách SĐT/Email sang vùng riêng tư** (hoặc Pull) → (4) Publish `firestore.rules`.
 
 ## Vận Hành Hằng Ngày & Sao Lưu Định Kỳ
 
 - **Hằng ngày:** Mọi thao tác đọc/ghi chạy trực tiếp trên **Cloud Firestore** (tốc độ ~100ms, cập nhật real-time giữa các máy qua `_meta/sync_state`, phiên đăng nhập Google tự gia hạn không hết hạn mỗi giờ). Ảnh hóa đơn và AI OCR vẫn dùng GAS + Google Drive miễn phí.
-- **Cuối tháng (hoặc khi cần xuất Excel/đối soát):** Admin vào **Cài đặt → Database & Sync → Push: Firebase → Google Sheet** để đồng bộ toàn bộ 11 tab về Google Sheet.
+- **Cuối tháng (hoặc khi cần xuất Excel/đối soát):** Admin vào **Cài đặt → Database & Sync → Push: Firebase → Google Sheet** để đồng bộ toàn bộ 10 bảng về Google Sheet (tự gộp `members` + `members_private` vào tab `Members`, không đụng tab `Fund_Ledger` lịch sử nếu còn).
 - **Dự phòng khẩn cấp:** Nếu có sự cố bất khả kháng, chỉ cần đổi `VITE_DB_PROVIDER=gas` trên Vercel hoặc chọn **Google Sheets** trong *Database & Sync*.

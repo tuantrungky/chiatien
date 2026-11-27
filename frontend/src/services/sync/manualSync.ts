@@ -28,7 +28,6 @@ export const TABLE_LABELS: Array<{ key: keyof RawClubTables; label: string }> = 
   { key: 'settlements', label: 'Lịch sử thanh toán (Settlements)' },
   { key: 'settings', label: 'Cấu hình (Settings)' },
   { key: 'editors', label: 'Quyền Editor (Editors)' },
-  { key: 'fund_ledger', label: 'Sổ quỹ lịch sử (Fund_Ledger)' },
 ];
 
 export function computeTableComparisons(
@@ -109,7 +108,7 @@ export async function pullSheetToFirebase(
   exportedAt: string;
 }> {
   assertBothConfigured();
-  onProgress?.('Đang kéo dữ liệu 11 bảng từ Google Sheets...', 10);
+  onProgress?.('Đang kéo dữ liệu 10 bảng từ Google Sheets...', 10);
   const gasRes = await exportRawTablesFromGas(idToken);
   validateRawTablesSnapshot(gasRes.tables, 'Google Sheets');
   const counts = await importAllRawTablesToFirestore(gasRes.tables, actorEmail, onProgress);
@@ -128,7 +127,7 @@ export async function pushFirebaseToSheet(
   onProgress?.('Đang đọc dữ liệu từ Cloud Firestore...', 20);
   const fbTables = await exportAllRawTablesFromFirestore();
   validateRawTablesSnapshot(fbTables, 'Cloud Firestore');
-  onProgress?.('Đang ghi đè 11 tab lên Google Sheets...', 60);
+  onProgress?.('Đang ghi đè 10 tab lên Google Sheets...', 60);
   const res = await importRawTablesToGas(idToken, fbTables);
   await markFirestorePushToSheet(actorEmail);
   onProgress?.('Đã sao lưu xong sang Google Sheets!', 100);

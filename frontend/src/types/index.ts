@@ -1,5 +1,5 @@
 /**
- * Schema 11 tabs Google Sheets & API Contract giữa Frontend và GAS Backend
+ * Schema 10 bảng (Firestore & Google Sheets) và API Contract giữa Frontend & Backend
  */
 
 export type MemberType = 'MAIN' | 'GUEST';
@@ -13,19 +13,8 @@ export type PaymentMethod = 'VIETQR' | 'CASH' | 'BANK_TRANSFER';
 export type EditorRole = 'ADMIN' | 'EDITOR' | 'MEMBER';
 export type PeriodType = 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR' | 'ALL';
 
-// Giữ các type FundLedger để đọc dữ liệu lịch sử (không tham gia tính công nợ mới)
-export type FundLedgerType = 'INCOME' | 'EXPENSE';
-export type FundLedgerCategory =
-  | 'MONTHLY_FUND'
-  | 'GUEST_FEE'
-  | 'OTHER_INCOME'
-  | 'COURT'
-  | 'SHUTTLECOCK'
-  | 'WATER'
-  | 'OTHER_EXPENSE';
-
 // ============================================================================
-// 1. SCHEMA GOOGLE SHEETS (11 TABS)
+// 1. SCHEMA 10 BẢNG + VÙNG RIÊNG TƯ (MEMBERS_PRIVATE)
 // ============================================================================
 
 export interface Member {
@@ -33,15 +22,23 @@ export interface Member {
   name: string;
   aliases: string;
   type: MemberType;
-  phone: string;
+  phone?: string;
   bank_bin: string;
   bank_name: string;
   account_no: string;
   account_name: string;
   email?: string;
+  has_email?: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface MemberPrivateRecord {
+  member_id: string;
+  phone: string;
+  email: string;
+  updated_at?: string;
 }
 
 export interface CourtLineItem {
@@ -197,27 +194,6 @@ export interface MonthlyDue {
   is_paid: boolean;
   paid_at: string;
   confirmed_by: string;
-}
-
-export interface FundLedgerEntry {
-  ledger_id: string;
-  date: string;
-  type: FundLedgerType;
-  category: FundLedgerCategory;
-  amount: number;
-  member_id: string;
-  member_name?: string;
-  session_id: string;
-  attendance_id: string;
-  period: string;
-  is_paid: boolean;
-  paid_at: string;
-  settlement_id: string;
-  receipt_drive_id: string;
-  receipt_url: string;
-  description: string;
-  created_by: string;
-  created_at: string;
 }
 
 export interface Settlement {

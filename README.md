@@ -1,13 +1,19 @@
 # CLB Cầu Lông & Nhậu — Web App Quản Lý Lịch & Chia Tiền
 
-Ứng dụng Web **Mobile-first** quản lý **Lịch Cầu Lông**, **Hóa đơn Cầu lông theo tháng** (tự động cấn trừ dư/thiếu và tiền vãng lai sang tháng sau) và **Chia tiền Ăn nhậu** (hỗ trợ cả ra quán & góp món tại nhà), tích hợp **VietQR**, thuật toán **Debt Simplification** tách biệt hoàn toàn Cầu lông / Ăn nhậu, **Google Drive** lưu hóa đơn và **Gemini AI** đọc ảnh hóa đơn.
+Ứng dụng Web **Mobile-first** quản lý **Lịch Cầu Lông**, **Hóa đơn Cầu lông theo tháng** (tự động cấn trừ dư/thiếu, góp ống cầu và tiền vãng lai sang tháng sau) và **Chia tiền Ăn nhậu** (hỗ trợ cả ra quán & góp món tại nhà, làm tròn lên `Math.ceil` toàn dự án để người ứng tiền không bị hụt), tích hợp **VietQR**, thuật toán **Debt Simplification** tách biệt hoàn toàn Cầu lông / Ăn nhậu, **Google Drive** lưu hóa đơn và **Gemini AI** đọc ảnh hóa đơn.
 
 - **Frontend (`/frontend`):** React + Vite + TypeScript + Tailwind CSS + Recharts + PWA (deploy **Vercel**).
-- **Backend (`/gas-backend`):** Google Apps Script (`Code.gs`, `AuthService.gs`, `SheetService.gs`, `DriveService.gs`, `GeminiService.gs`) dùng `CacheService` (tăng tốc `getAll`) và làm proxy bảo mật `GEMINI_API_KEY`.
-- **Database (Hybrid):** **Cloud Firestore** là DB chính (khuyến nghị, realtime, Firebase Auth) — hoặc **Google Sheets** (11 tabs: `Members`, `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Fund_Ledger`, `Settings`, `Editors`) làm nguồn gốc/backup/fallback. Chọn nguồn bằng `VITE_DB_PROVIDER` = `firebase` | `gas` | `mock`; Admin đồng bộ 2 chiều Sheet ↔ Firebase trong **Cài đặt → Database & Đồng bộ**.
-- Logic nghiệp vụ dùng chung ở `frontend/src/services/domainEngine.ts` (Firebase/Mock) và song song ở `gas-backend/SheetService.gs` (GAS) — hai nơi phải luôn khớp nhau.
+- **Backend & Storage (Hybrid):** **Cloud Firestore + Firebase Auth** làm database chính (realtime, tự gia hạn phiên) + **Google Apps Script (`/gas-backend`)** làm proxy bảo mật `GEMINI_API_KEY`, upload Google Drive và đồng bộ 2 chiều với **Google Sheets (10 tabs)**.
+- **Database (10 bảng + vùng riêng tư):** `Members` (trên Firestore tách `members` công khai cho App/VietQR và `members_private` ẩn `phone`/`email` khỏi Viewer), `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Settings`, `Editors` *(tab `Fund_Ledger` cũ trên Sheet nếu còn chỉ giữ làm kho lưu trữ, app không đọc/ghi)*.
+- Logic nghiệp vụ dùng chung ở [domainEngine.ts](./frontend/src/services/domainEngine.ts) (Firebase/Mock) và song song ở [SheetService.gs](./gas-backend/SheetService.gs) (GAS) — hai nơi giữ parity 1–1.
 
-> Chi tiết nghiệp vụ, schema và API Contract: [SPEC.md](./SPEC.md). Thiết lập Firebase: [docs/FIREBASE_HYBRID_GUIDE.md](./docs/FIREBASE_HYBRID_GUIDE.md). Kiến trúc & quyết định: [docs/FIREBASE_HYBRID_PLAN.md](./docs/FIREBASE_HYBRID_PLAN.md). Theo dõi audit/roadmap: [AUDIT_CHECKLIST.md](./AUDIT_CHECKLIST.md), [docs/CALCULATION_AUDIT_CHECKLIST.md](./docs/CALCULATION_AUDIT_CHECKLIST.md).
+> **Tài liệu chính:**
+> - Đặc tả nguồn chân lý: [SPEC.md](./SPEC.md)
+> - Thiết lập Firebase & vận hành Hybrid: [docs/FIREBASE_HYBRID_GUIDE.md](./docs/FIREBASE_HYBRID_GUIDE.md)
+> - Triển khai GAS Backend: [gas-backend/DEPLOY_GAS.md](./gas-backend/DEPLOY_GAS.md)
+> - Kiến trúc Hybrid (ADR): [docs/adr/0001-firebase-hybrid.md](./docs/adr/0001-firebase-hybrid.md)
+> - Lịch sử audit & quy tắc đã chốt: [docs/CHANGELOG_AUDIT.md](./docs/CHANGELOG_AUDIT.md)
+> - Nợ kỹ thuật & lộ trình tương lai: [docs/ROADMAP.md](./docs/ROADMAP.md)
 
 ---
 
@@ -36,7 +42,7 @@
    - `ROOT_DRIVE_FOLDER_ID`: Folder ID ở Bước 1.
    - `GOOGLE_CLIENT_ID`: *(Sẽ điền ngay sau khi hoàn tất Bước 3 bên dưới)*.
    - `FIREBASE_WEB_API_KEY`: *(Chỉ khi dùng Firebase — xem docs/FIREBASE_HYBRID_GUIDE.md)*.
-4. Mở file `SheetService.gs`, chọn hàm **`setupDatabase`** trên thanh công cụ và bấm **Run** (cấp quyền truy cập Sheet & Drive cho script). Script sẽ tự tạo / nâng cấp đủ **11 tabs**, đóng băng header, đặt định dạng plain text `@` cho cột mã/ngày/SĐT/STK và điền cấu hình mặc định vào `Settings`.
+4. Mở file `SheetService.gs`, chọn hàm **`setupDatabase`** trên thanh công cụ và bấm **Run** (cấp quyền truy cập Sheet & Drive cho script). Script sẽ tự tạo / nâng cấp đủ **10 tabs** hoạt động, đóng băng header, đặt định dạng plain text `@` cho cột mã/ngày/SĐT/STK/issued_at và điền cấu hình mặc định vào `Settings`.
 5. Quay lại Google Sheet:
    - Vào tab **`Editors`**, thêm dòng đầu tiên cho chính bạn (`email` viết thường, `name`, `role = ADMIN`, `is_active = TRUE`).
    - Vào tab **`Members`**, thêm ít nhất 1 dòng Thủ quỹ (`member_id = MEM_001`, `type = MAIN`, kèm `bank_bin`, `bank_name`, `account_no` nhớ giữ số `0` đầu, `account_name`, `is_active = TRUE`).

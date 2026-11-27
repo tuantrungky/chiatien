@@ -25,7 +25,7 @@ export function MemberIdentityModal({ members, onLinked }: MemberIdentityModalPr
     const q = search.trim().toLowerCase();
     return members
       .filter((m) => m.is_active)
-      .filter((m) => !q || m.name.toLowerCase().includes(q) || (m.email || '').toLowerCase().includes(q))
+      .filter((m) => !q || m.name.toLowerCase().includes(q) || (m.aliases || '').toLowerCase().includes(q))
       .sort((a, b) => {
         if (a.type !== b.type) return a.type === 'MAIN' ? -1 : 1;
         return a.name.localeCompare(b.name, 'vi');
@@ -58,7 +58,7 @@ export function MemberIdentityModal({ members, onLinked }: MemberIdentityModalPr
             <div>
               <h3 className="text-base font-bold text-slate-900">Bạn là ai trong CLB?</h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Tài khoản <span className="font-semibold text-slate-700">{editor.email}</span> chưa gắn tên thành viên. Chọn tên của bạn để lưu vào Google Sheet và xem nhanh khoản nợ cá nhân.
+                Tài khoản <span className="font-semibold text-slate-700">{editor.email}</span> chưa gắn tên thành viên. Chọn tên của bạn để lưu liên kết thành viên và xem nhanh khoản nợ cá nhân.
               </p>
             </div>
           </div>
@@ -113,9 +113,9 @@ export function MemberIdentityModal({ members, onLinked }: MemberIdentityModalPr
                         {m.type === 'MAIN' ? 'Cố định' : 'Vãng lai'}
                       </span>
                     </div>
-                    {m.email && (
+                    {(m.has_email || m.email) && (
                       <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                        Đang gắn: {m.email}
+                        {m.member_id === myMemberId ? 'Tài khoản của bạn' : 'Đã liên kết tài khoản'}
                       </p>
                     )}
                   </div>
@@ -146,7 +146,7 @@ export function MemberIdentityModal({ members, onLinked }: MemberIdentityModalPr
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 cursor-pointer"
           >
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            <span>{saving ? 'Đang lưu vào Sheet...' : 'Xác nhận tên của tôi'}</span>
+            <span>{saving ? 'Đang lưu...' : 'Xác nhận tên của tôi'}</span>
           </button>
         </div>
       </div>

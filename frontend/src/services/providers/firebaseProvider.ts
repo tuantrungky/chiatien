@@ -24,13 +24,13 @@ import type {
   CreateSessionResponse,
   Editor,
   EditorRole,
-  FundLedgerEntry,
   GenerateSchedulePayload,
   GuestStatsData,
   IssueMonthlyBillPayload,
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBill,
   MonthlyBillData,
   MonthlyDue,
@@ -70,7 +70,6 @@ import {
   planDeleteSession,
   planGenerateSchedule,
   planIssueMonthlyBill,
-  planLinkMemberEmail,
   planManageEditors,
   planMarkDuePaid,
   planSaveMonthlyContributions,
@@ -357,14 +356,35 @@ async function verifyActorEditorRole(idToken: string): Promise<{
 }> {
   const db = getFirebaseDb();
   const actor = resolveCurrentActor(idToken);
-  const [editorSnap, memberSnap] = await Promise.all([
+  const [editorSnap, privSnap] = await Promise.all([
     getDoc(doc(db, 'editors', actor.email)),
-    getDocs(query(collection(db, 'members'), where('email', '==', actor.email))),
+    getDocs(query(collection(db, 'members_private'), where('email', '==', actor.email))),
   ]);
 
-  const linkedMember = memberSnap.docs[0]?.data() as Member | undefined;
-  const linkedMemberId = linkedMember?.member_id || '';
-  const linkedMemberName = linkedMember?.name || '';
+  let linkedMemberId = '';
+  let linkedMemberName = '';
+  const privDoc = privSnap.docs[0]?.data() as MemberPrivateRecord | undefined;
+  if (privDoc?.member_id) {
+    linkedMemberId = privDoc.member_id;
+    const mSnap = await getDoc(doc(db, 'members', linkedMemberId));
+    if (mSnap.exists()) {
+      linkedMemberName = String((mSnap.data() as Member).name || '').trim();
+    }
+  } else {
+    // Fallback nhẹ trong thời gian chuyển đổi trước khi chạy migrate members_private
+    try {
+      const legacySnap = await getDocs(
+        query(collection(db, 'members'), where('email', '==', actor.email))
+      );
+      const legacyMember = legacySnap.docs[0]?.data() as Member | undefined;
+      if (legacyMember) {
+        linkedMemberId = legacyMember.member_id || '';
+        linkedMemberName = legacyMember.name || '';
+      }
+    } catch {
+      // Ignore if legacy fallback fails
+    }
+  }
 
   if (editorSnap.exists()) {
     const ed = editorSnap.data() as Editor;
@@ -449,6 +469,7 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
   const db = getFirebaseDb();
   const [
     membersSnap,
+    membersPrivateSnap,
     sessionsSnap,
     attendanceSnap,
     itemsSnap,
@@ -456,11 +477,11 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
     billsSnap,
     duesSnap,
     settlementsSnap,
-    ledgerSnap,
     settingsMap,
     editorsSnap,
   ] = await Promise.all([
     getDocs(collection(db, 'members')),
+    getDocs(collection(db, 'members_private')),
     getDocs(collection(db, 'sessions')),
     getDocs(collection(db, 'attendance')),
     getDocs(collection(db, 'session_items')),
@@ -468,10 +489,22 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
     getDocs(collection(db, 'monthly_bills')),
     getDocs(collection(db, 'monthly_dues')),
     getDocs(collection(db, 'settlements')),
-    getDocs(collection(db, 'fund_ledger')),
     fetchSettingsDoc(),
     getDocs(collection(db, 'editors')),
   ]);
+
+  const privByMemberId = new Map<string, MemberPrivateRecord>(
+    snapToDocs<MemberPrivateRecord>(membersPrivateSnap).map((p) => [p.member_id, p])
+  );
+  const membersMerged: Member[] = snapToDocs<Member>(membersSnap).map((m) => {
+    const priv = privByMemberId.get(m.member_id);
+    const { has_email: _he, ...rest } = m;
+    return {
+      ...rest,
+      phone: String(priv?.phone ?? m.phone ?? '').trim(),
+      email: String(priv?.email ?? m.email ?? '').trim().toLowerCase(),
+    };
+  });
 
   const schedule = snapToDocs<ScheduleDay & { month?: string }>(scheduleSnap).map((row) => {
     const clean = { ...row };
@@ -480,7 +513,7 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
   });
 
   return {
-    members: snapToDocs<Member>(membersSnap),
+    members: membersMerged,
     sessions: snapToDocs<Session>(sessionsSnap),
     attendance: snapToDocs<Attendance>(attendanceSnap),
     session_items: snapToDocs<SessionItem>(itemsSnap),
@@ -488,10 +521,87 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
     monthly_bills: snapToDocs<MonthlyBill>(billsSnap),
     monthly_dues: snapToDocs<MonthlyDue>(duesSnap),
     settlements: snapToDocs<Settlement>(settlementsSnap),
-    fund_ledger: snapToDocs<FundLedgerEntry>(ledgerSnap),
     settings: settingsMapToRows(settingsMap),
     editors: snapToDocs<Editor>(editorsSnap),
   };
+}
+
+export async function migrateMembersPrivateOnFirestore(
+  actorEmail: string
+): Promise<{ migrated: number; cleaned: number }> {
+  const db = getFirebaseDb();
+  const [membersSnap, privSnap] = await Promise.all([
+    getDocs(collection(db, 'members')),
+    getDocs(collection(db, 'members_private')),
+  ]);
+
+  const existingPriv = new Map<string, MemberPrivateRecord>(
+    snapToDocs<MemberPrivateRecord>(privSnap).map((p) => [p.member_id, p])
+  );
+  const now = nowIsoVN();
+  const ops: BatchOp[] = [];
+  let migrated = 0;
+  let cleaned = 0;
+
+  for (const mDoc of membersSnap.docs) {
+    const raw = mDoc.data() as Member & Record<string, unknown>;
+    const memberId = String(raw.member_id || mDoc.id).trim();
+    if (!memberId) continue;
+
+    const prevPriv = existingPriv.get(memberId);
+    const phone = String(raw.phone ?? prevPriv?.phone ?? '').trim();
+    const email = String(raw.email ?? prevPriv?.email ?? '').trim().toLowerCase();
+    const hasEmail = Boolean(email || raw.has_email);
+
+    if (!prevPriv || (raw.phone !== undefined && raw.phone !== prevPriv.phone) || (raw.email !== undefined && String(raw.email).toLowerCase() !== prevPriv.email)) {
+      ops.push({
+        type: 'set',
+        col: 'members_private',
+        id: memberId,
+        data: {
+          member_id: memberId,
+          phone,
+          email,
+          updated_at: prevPriv?.updated_at || raw.updated_at || now,
+        },
+      });
+      migrated++;
+    }
+
+    if ('phone' in raw || 'email' in raw || raw.has_email !== hasEmail) {
+      const { phone: _p, email: _e, ...publicFields } = raw;
+      ops.push({
+        type: 'set',
+        col: 'members',
+        id: memberId,
+        data: {
+          ...publicFields,
+          member_id: memberId,
+          has_email: hasEmail,
+          updated_at: raw.updated_at || now,
+        },
+      });
+      cleaned++;
+    }
+  }
+
+  if (ops.length > 0) {
+    ops.push({
+      type: 'set',
+      col: '_meta',
+      id: 'sync_state',
+      data: {
+        dataRevision: Date.now(),
+        updatedAt: now,
+        updatedBy: actorEmail,
+        schemaVersion: 1,
+      },
+      merge: true,
+    });
+    await commitOpsInChunks(ops);
+  }
+
+  return { migrated, cleaned };
 }
 
 export async function importAllRawTablesToFirestore(
@@ -502,6 +612,8 @@ export async function importAllRawTablesToFirestore(
   const db = getFirebaseDb();
   const ops: BatchOp[] = [];
   onProgress?.('Đang đối chiếu dữ liệu cũ trên Firestore...', 20);
+
+  const str = (v: unknown): string => String(v ?? '').trim();
 
   const syncCollection = async <T extends object>(
     colName: CollectionKey,
@@ -529,26 +641,94 @@ export async function importAllRawTablesToFirestore(
     }
   };
 
+  const now = nowIsoVN();
+  const membersList = tables.members || [];
+
   await Promise.all([
-    syncCollection('members', tables.members || [], (r) => String(r.member_id || '').trim()),
-    syncCollection('sessions', tables.sessions || [], (r) => String(r.session_id || '').trim()),
-    syncCollection('attendance', tables.attendance || [], (r) => String(r.attendance_id || '').trim()),
-    syncCollection('session_items', tables.session_items || [], (r) => String(r.item_id || '').trim()),
+    syncCollection(
+      'members',
+      membersList,
+      (r) => str(r.member_id),
+      (r) => {
+        const email = str(r.email).toLowerCase();
+        const { phone: _p, email: _e, ...rest } = r;
+        return {
+          ...rest,
+          member_id: str(r.member_id),
+          bank_bin: str(r.bank_bin),
+          account_no: str(r.account_no),
+          has_email: Boolean(email || r.has_email),
+        };
+      }
+    ),
+    syncCollection(
+      'members_private',
+      membersList,
+      (r) => str(r.member_id),
+      (r) => ({
+        member_id: str(r.member_id),
+        phone: str(r.phone),
+        email: str(r.email).toLowerCase(),
+        updated_at: r.updated_at || now,
+      })
+    ),
+    syncCollection(
+      'sessions',
+      tables.sessions || [],
+      (r) => str(r.session_id),
+      (r) => ({
+        ...r,
+        session_id: str(r.session_id),
+        date: str(r.date),
+      }) as unknown as Record<string, unknown>
+    ),
+    syncCollection(
+      'attendance',
+      tables.attendance || [],
+      (r) => str(r.attendance_id),
+      (r) => ({
+        ...r,
+        attendance_id: str(r.attendance_id),
+        session_date: str(r.session_date),
+      }) as unknown as Record<string, unknown>
+    ),
+    syncCollection('session_items', tables.session_items || [], (r) => str(r.item_id)),
     syncCollection(
       'schedule',
       tables.schedule || [],
-      (r) => String(r.plan_id || '').trim(),
-      (r) => ({ ...r, month: String(r.date || '').slice(0, 7) }) as unknown as Record<string, unknown>
+      (r) => str(r.plan_id),
+      (r) => ({
+        ...r,
+        plan_id: str(r.plan_id),
+        date: str(r.date),
+        month: str(r.date).slice(0, 7),
+        start_time: str(r.start_time || '20:00'),
+        end_time: str(r.end_time || '21:30'),
+      }) as unknown as Record<string, unknown>
     ),
-    syncCollection('monthly_bills', tables.monthly_bills || [], (r) => String(r.month || '').trim()),
-    syncCollection('monthly_dues', tables.monthly_dues || [], (r) => String(r.due_id || '').trim()),
-    syncCollection('settlements', tables.settlements || [], (r) => String(r.settlement_id || '').trim()),
-    syncCollection('fund_ledger', tables.fund_ledger || [], (r) => String(r.ledger_id || '').trim()),
+    syncCollection(
+      'monthly_bills',
+      tables.monthly_bills || [],
+      (r) => str(r.month),
+      (r) => ({ ...r, month: str(r.month) }) as unknown as Record<string, unknown>
+    ),
+    syncCollection(
+      'monthly_dues',
+      tables.monthly_dues || [],
+      (r) => str(r.due_id),
+      (r) => ({
+        ...r,
+        due_id: str(r.due_id),
+        month: str(r.month),
+        issued_at: str(r.issued_at),
+      }) as unknown as Record<string, unknown>
+    ),
+    syncCollection('settlements', tables.settlements || [], (r) => str(r.settlement_id)),
     syncCollection(
       'editors',
       tables.editors || [],
-      (r) => String(r.email || '').trim().toLowerCase(),
-      (r) => ({ ...r, email: String(r.email || '').trim().toLowerCase() }) as unknown as Record<string, unknown>
+      (r) => str(r.email).toLowerCase(),
+      (r) => ({ ...r, email: str(r.email).toLowerCase() }) as unknown as Record<string, unknown>
     ),
   ]);
 
@@ -561,7 +741,6 @@ export async function importAllRawTablesToFirestore(
     data: settingsMap as unknown as Record<string, unknown>,
   });
 
-  const now = nowIsoVN();
   ops.push({
     type: 'set',
     col: '_meta',
@@ -581,7 +760,7 @@ export async function importAllRawTablesToFirestore(
   onProgress?.('Hoàn tất đồng bộ về Firebase!', 100);
 
   return {
-    members: (tables.members || []).length,
+    members: membersList.length,
     sessions: (tables.sessions || []).length,
     attendance: (tables.attendance || []).length,
     session_items: (tables.session_items || []).length,
@@ -589,7 +768,6 @@ export async function importAllRawTablesToFirestore(
     monthly_bills: (tables.monthly_bills || []).length,
     monthly_dues: (tables.monthly_dues || []).length,
     settlements: (tables.settlements || []).length,
-    fund_ledger: (tables.fund_ledger || []).length,
     settings: settingsRows.length,
     editors: (tables.editors || []).length,
   };
@@ -732,26 +910,56 @@ export const firebaseProvider: DataProvider = {
     return trackWrite('linkMemberEmail', async () => {
       try {
         const actor = resolveCurrentActor(idToken);
+        const cleanId = String(memberId || '').trim();
+        if (!cleanId) {
+          throw new ApiClientError('BAD_REQUEST', 'Thiếu memberId cần liên kết.', 400);
+        }
         const db = getFirebaseDb();
-        const [settings, membersSnap] = await Promise.all([
-          fetchSettingsDoc(),
-          getDocs(collection(db, 'members')),
+        const [targetSnap, myPrivSnap] = await Promise.all([
+          getDoc(doc(db, 'members', cleanId)),
+          getDocs(query(collection(db, 'members_private'), where('email', '==', actor.email))),
         ]);
-        const dataset: ClubDataset = {
-          settings,
-          members: snapToDocs<Member>(membersSnap),
-          sessions: [],
-          attendance: [],
-          session_items: [],
-          schedule: [],
-          monthly_bills: [],
-          monthly_dues: [],
-          settlements: [],
-          editors: [],
-        };
-        const plan = planLinkMemberEmail(dataset, memberId, actor.email);
-        await commitMutationPlan(plan, actor.email);
-        return plan.result;
+        if (!targetSnap.exists()) {
+          throw new ApiClientError('NOT_FOUND', `Không tìm thấy thành viên ${cleanId}`, 404);
+        }
+
+        const now = nowIsoVN();
+        const batch = writeBatch(db);
+        for (const oldDoc of myPrivSnap.docs) {
+          if (oldDoc.id !== cleanId) {
+            batch.update(doc(db, 'members_private', oldDoc.id), {
+              email: '',
+              updated_at: now,
+            });
+          }
+        }
+        batch.set(
+          doc(db, 'members_private', cleanId),
+          {
+            member_id: cleanId,
+            email: actor.email,
+            updated_at: now,
+          },
+          { merge: true }
+        );
+        try {
+          await batch.commit();
+        } catch (commitErr) {
+          const code =
+            typeof commitErr === 'object' && commitErr && 'code' in commitErr
+              ? String((commitErr as { code: unknown }).code)
+              : '';
+          const msg = commitErr instanceof Error ? commitErr.message : '';
+          if (code === 'permission-denied' || msg.includes('Missing or insufficient permissions')) {
+            throw new ApiClientError(
+              'BAD_REQUEST',
+              'Thành viên này đã được liên kết với tài khoản Google khác (hoặc email chưa xác minh).',
+              400
+            );
+          }
+          throw commitErr;
+        }
+        return { linkedMemberId: cleanId, email: actor.email };
       } catch (err) {
         mapFirebaseError(err);
       }
@@ -782,15 +990,26 @@ export const firebaseProvider: DataProvider = {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
         const targetMonth = String(payload.date || getTodayDateStr()).slice(0, 7);
-        const [settings, membersSnap, scheduleSnap] = await Promise.all([
+        const cleanPlanId = String(payload.planId || '').trim();
+        const [settings, membersSnap, scheduleSnap, extraPlanSnap] = await Promise.all([
           fetchSettingsDoc(),
           getDocs(collection(db, 'members')),
           getDocs(query(collection(db, 'schedule'), where('month', '==', targetMonth))),
+          cleanPlanId ? getDoc(doc(db, 'schedule', cleanPlanId)) : Promise.resolve(null),
         ]);
+        const scheduleRows = dedupeById(
+          [
+            ...snapToDocs<ScheduleDay>(scheduleSnap),
+            ...(extraPlanSnap && extraPlanSnap.exists()
+              ? [extraPlanSnap.data() as ScheduleDay]
+              : []),
+          ],
+          (d) => d.plan_id
+        );
         const dataset: ClubDataset = {
           settings,
           members: snapToDocs<Member>(membersSnap),
-          schedule: snapToDocs<ScheduleDay>(scheduleSnap),
+          schedule: scheduleRows,
           sessions: [],
           attendance: [],
           session_items: [],
@@ -816,20 +1035,39 @@ export const firebaseProvider: DataProvider = {
       try {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
-        const [settings, membersSnap, sessSnap, attSnap, itemsSnap] = await Promise.all([
-          fetchSettingsDoc(),
-          getDocs(collection(db, 'members')),
-          getDoc(doc(db, 'sessions', payload.sessionId)),
-          getDocs(query(collection(db, 'attendance'), where('session_id', '==', payload.sessionId))),
-          getDocs(query(collection(db, 'session_items'), where('session_id', '==', payload.sessionId))),
-        ]);
+        const targetMonth = String(payload.date || getTodayDateStr()).slice(0, 7);
+        const cleanPlanId = String(payload.planId || '').trim();
+        const [settings, membersSnap, sessSnap, attSnap, itemsSnap, scheduleSnap, newPlanSnap] =
+          await Promise.all([
+            fetchSettingsDoc(),
+            getDocs(collection(db, 'members')),
+            getDoc(doc(db, 'sessions', payload.sessionId)),
+            getDocs(query(collection(db, 'attendance'), where('session_id', '==', payload.sessionId))),
+            getDocs(query(collection(db, 'session_items'), where('session_id', '==', payload.sessionId))),
+            getDocs(query(collection(db, 'schedule'), where('month', '==', targetMonth))),
+            cleanPlanId ? getDoc(doc(db, 'schedule', cleanPlanId)) : Promise.resolve(null),
+          ]);
+        const oldSess = sessSnap.exists() ? (sessSnap.data() as Session) : null;
+        const extraSchedules: ScheduleDay[] = [];
+        if (newPlanSnap && newPlanSnap.exists()) {
+          extraSchedules.push(newPlanSnap.data() as ScheduleDay);
+        }
+        if (oldSess?.plan_id && oldSess.plan_id !== cleanPlanId) {
+          const oldPlanSnap = await getDoc(doc(db, 'schedule', oldSess.plan_id));
+          if (oldPlanSnap.exists()) {
+            extraSchedules.push(oldPlanSnap.data() as ScheduleDay);
+          }
+        }
         const dataset: ClubDataset = {
           settings,
           members: snapToDocs<Member>(membersSnap),
-          sessions: sessSnap.exists() ? [sessSnap.data() as Session] : [],
+          sessions: oldSess ? [oldSess] : [],
           attendance: snapToDocs<Attendance>(attSnap),
           session_items: snapToDocs<SessionItem>(itemsSnap),
-          schedule: [],
+          schedule: dedupeById(
+            [...snapToDocs<ScheduleDay>(scheduleSnap), ...extraSchedules],
+            (d) => d.plan_id
+          ),
           monthly_bills: [],
           monthly_dues: [],
           settlements: [],
@@ -1110,13 +1348,15 @@ export const firebaseProvider: DataProvider = {
       try {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
-        const [settings, membersSnap] = await Promise.all([
+        const [settings, membersSnap, privSnap] = await Promise.all([
           fetchSettingsDoc(),
           getDocs(collection(db, 'members')),
+          getDocs(collection(db, 'members_private')),
         ]);
         const dataset: ClubDataset = {
           settings,
           members: snapToDocs<Member>(membersSnap),
+          members_private: snapToDocs<MemberPrivateRecord>(privSnap),
           sessions: [],
           attendance: [],
           session_items: [],
@@ -1133,6 +1373,31 @@ export const firebaseProvider: DataProvider = {
         mapFirebaseError(err);
       }
     });
+  },
+
+  async fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]> {
+    try {
+      await assertEditorActor(idToken);
+      const db = getFirebaseDb();
+      const [privSnap, membersSnap] = await Promise.all([
+        getDocs(collection(db, 'members_private')),
+        getDocs(collection(db, 'members')),
+      ]);
+      const privById = new Map<string, MemberPrivateRecord>(
+        snapToDocs<MemberPrivateRecord>(privSnap).map((p) => [p.member_id, p])
+      );
+      return snapToDocs<Member>(membersSnap).map((m) => {
+        const p = privById.get(m.member_id);
+        return {
+          member_id: m.member_id,
+          phone: String(p?.phone ?? m.phone ?? '').trim(),
+          email: String(p?.email ?? m.email ?? '').trim().toLowerCase(),
+          updated_at: p?.updated_at || m.updated_at,
+        };
+      });
+    } catch (err) {
+      mapFirebaseError(err);
+    }
   },
 
   async updateSettings(

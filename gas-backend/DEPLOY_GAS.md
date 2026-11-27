@@ -67,7 +67,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 
 ---
 
-## Bước 5: Chạy hàm `setupDatabase()` (Khởi tạo / Nâng cấp lên 11 tabs)
+## Bước 5: Chạy hàm `setupDatabase()` (Khởi tạo / Nâng cấp lên 10 tabs)
 
 1. Quay lại tab **Editor** (`</>`), chọn file **`SheetService.gs`**.
 2. Trên thanh công cụ phía trên, ở dropdown chọn hàm (bên cạnh nút Run/Debug), chọn **`setupDatabase`**.
@@ -75,7 +75,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 4. Lần đầu chạy, Google sẽ hiện hộp thoại yêu cầu **Review permissions**:
    - Chọn tài khoản Google của bạn.
    - Nếu thấy cảnh báo *"Google hasn't verified this app"*, bấm **Advanced** -> **Go to CaulongNhau-Backend (unsafe)** -> **Allow**.
-5. Mở lại Google Sheet sẽ thấy đủ **11 tabs**: `Members`, `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Fund_Ledger`, `Settings`, `Editors` với dòng header đã đóng băng, định dạng plain text `@` cho cột mã/ngày/SĐT/STK và `Settings` có sẵn cấu hình mặc định (hàm chạy idempotent, an toàn khi nâng cấp từ bản cũ).
+5. Mở lại Google Sheet sẽ thấy đủ **10 tabs**: `Members`, `Sessions`, `Attendance`, `Session_Items`, `Schedule`, `Monthly_Bills`, `Monthly_Dues`, `Settlements`, `Settings`, `Editors` với dòng header đã đóng băng, định dạng plain text `@` cho cột mã/ngày/SĐT/STK/`issued_at` và `Settings` có sẵn cấu hình mặc định (hàm chạy idempotent, an toàn khi nâng cấp từ bản cũ; tab `Fund_Ledger` lịch sử nếu còn sẽ được giữ nguyên, không bị xóa).
 
 ---
 

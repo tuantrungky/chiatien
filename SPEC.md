@@ -1,6 +1,6 @@
 ﻿# SPEC.md — Hệ Thống Quản Lý Lịch Cầu Lông & Chia Tiền Ăn Nhậu
 
-> **Vai trò tài liệu:** Nguồn chân lý duy nhất (Single Source of Truth) cho kiến trúc, phân quyền, nghiệp vụ tính tiền tách biệt Cầu lông / Ăn nhậu, cơ sở dữ liệu Google Sheets (11 tabs), hợp đồng API (REST over Google Apps Script) và giao diện Mobile-first của dự án.
+> **Vai trò tài liệu:** Nguồn chân lý duy nhất (Single Source of Truth) cho kiến trúc Hybrid (**Cloud Firestore** làm DB chính + **Google Sheets** 10 tabs sao lưu/dự phòng), phân quyền, bảo mật riêng tư (`members_private`), nghiệp vụ tính tiền tách biệt Cầu lông / Ăn nhậu (`Math.ceil` toàn dự án), hợp đồng API và giao diện Mobile-first của dự án.
 
 ---
 
@@ -15,17 +15,19 @@ Dự án xây dựng một Web Application tối ưu cho thiết bị di động
   - Khách vãng lai (`GUEST`) đóng phí theo buổi (`guest_fee`) trực tiếp cho Thủ quỹ (`treasurer_member_id`); **không tạo chuyển khoản chéo giữa các thành viên chính**.
 - **Ăn nhậu (`DRINKING`):**
   - Hỗ trợ cả ăn ngoài quán (`RESTAURANT`) lẫn tụ tập ở nhà (`HOME`) có góp món (`Session_Items`: `BILL` | `ITEM`).
-  - Tổng chi phí bàn nhậu bằng tổng các khoản `BILL` và `ITEM` (hoặc tổng hóa đơn nhập tay/AI); chia đều cho những người tham gia; tính `net_amount = per_person - contributed_amount` cho từng người (`> 0` là phải trả thêm, `< 0` là được nhận lại).
+  - Tổng chi phí bàn nhậu bằng tổng các khoản `BILL` và `ITEM` (hoặc tổng hóa đơn nhập tay/AI); chia đều và **làm tròn lên (`Math.ceil`)** cho những người tham gia; tính `net_amount = per_person - contributed_amount` (`> 0` là phải trả thêm, `< 0` là được nhận lại), bù phần dư làm tròn về người góp nhiều nhất để người ứng tiền không bị hụt và $\sum \text{net\_amount} = 0$.
   - Thuật toán cấn trừ nợ vòng tròn (**Debt Simplification**) **chỉ chạy nội bộ trong nhóm Ăn nhậu**, không bao giờ trộn lẫn với công nợ Cầu lông.
 - **Tích hợp AI (Gemini):** Bóc tách hóa đơn từ ảnh chụp (lưu ảnh trên Google Drive theo thư mục tháng `YYYY-MM`). Điểm danh sử dụng tick tay trực tiếp + tìm kiếm + thêm nhanh vãng lai (đã lược bỏ giọng nói).
-- **Hiệu năng & Offline-tolerant:** API gộp `getAll` + request-scoped `_SHEET_CACHE_` (đọc mỗi tab Google Sheet đúng 1 lần/request) + cắt gọn `sessions` trả về (6 tháng gần nhất + buổi còn `Attendance` chưa đóng để luôn dưới 95 KB `CacheService`) + cache `localStorage` Stale-While-Revalidate (`cln_swr_v6` (key kèm provider/tháng/kỳ)) + lưu phiên đăng nhập (`cln_editor_session_v2`, `cln_my_member_id_v1`) với làm mới token thầm lặng (Google One Tap).
-- **Định danh thành viên, Nhắc nợ & Cảnh báo quá hạn:** Thành viên thường cũng có thể đăng nhập Google (`verifyUser`), tự chọn tên mình để lưu `Members.email` (`linkMemberEmail`), lọc `"Chỉ xem của tôi"` hoặc xem `"Cả CLB (nhắc nhau)"` kèm cảnh báo quá hạn theo mốc 10 / 15 / 20 / 30+ ngày (`OverdueBadge`) và nút **Copy tin nhắn Zalo**.
+- **Hiệu năng & Offline-tolerant:**
+  - **Firestore Primary:** Query theo phạm vi (`fetchScopedDataset`), IndexedDB `persistentLocalCache`, 1 listener `onSnapshot` duy nhất trên `_meta/sync_state`.
+  - **GAS Fallback & Cache:** API gộp `getAll` + request-scoped `_SHEET_CACHE_` + cắt gọn `sessions` trả về (6 tháng gần nhất + buổi còn `Attendance` chưa đóng để luôn dưới 95 KB `CacheService`) + cache `localStorage` Stale-While-Revalidate (`cln_swr_v6` kèm provider/tháng/kỳ) + lưu phiên đăng nhập (`cln_editor_session_v2`, `cln_my_member_id_v1`).
+- **Định danh thành viên, Bảo mật riêng tư & Cảnh báo quá hạn:** `phone` và `email` được tách sang `members_private` trên Firestore (và strip khỏi mọi `doGet` GAS công khai) để Viewer không thấy PII. Thành viên thường đăng nhập Google (`verifyUser`) tự chọn tên mình để liên kết `email` (`linkMemberEmail`), lọc `"Chỉ xem của tôi"` hoặc xem `"Cả CLB (nhắc nhau)"` kèm cảnh báo quá hạn theo mốc 10 / 15 / 20 / 30+ ngày (`OverdueBadge`) và nút **Copy tin nhắn Zalo**.
 
 ### 1.2. Nguyên tắc thiết kế cốt lõi
-1. **Viewer Zero-Friction:** Thành viên thường mở link trên điện thoại là xem được ngay tổng quan, lịch cầu lông, lịch sử buổi chơi, công nợ tách riêng Cầu lông / Ăn nhậu, hóa đơn tháng và quét mã **VietQR** — **không cần đăng nhập**. Khi đăng nhập Google lần đầu (không phải Editor), hệ thống hỏi tên thành viên để liên kết `Members.email`.
-2. **Tách biệt tuyệt đối Cầu lông & Ăn nhậu:** Công nợ Cầu lông (`Monthly_Dues` và phí `GUEST`) luôn chuyển thẳng cho Thủ quỹ (`treasurer_member_id`). Công nợ Ăn nhậu chỉ đối soát chéo giữa các thành viên có phát sinh ăn nhậu.
-3. **Google Sheets làm Database minh bạch (11 Tabs):** Tự động format plain text (`@`) cho các cột ID, ngày, số điện thoại, `bank_bin`, `account_no` để tránh Google Sheets mất số `0` đầu hoặc biến đổi thành số khoa học.
-4. **GAS làm Backend & Security Proxy:** Toàn bộ logic ghi dữ liệu (`LockService`), xác thực Google ID Token, lưu ảnh Drive và gọi Gemini API đều đi qua Google Apps Script (`Code.gs`).
+1. **Viewer Zero-Friction & Privacy-by-Default:** Thành viên thường mở link là xem được ngay tổng quan, lịch cầu lông, lịch sử buổi chơi, công nợ tách riêng Cầu lông / Ăn nhậu, hóa đơn tháng và quét mã **VietQR** — **không cần đăng nhập**, và **không bao giờ thấy `phone`/`email`** của người khác. Khi đăng nhập Google (email đã xác minh) lần đầu, hệ thống hỏi tên thành viên để liên kết tài khoản.
+2. **Tách biệt tuyệt đối Cầu lông & Ăn nhậu:** Công nợ Cầu lông (`Monthly_Dues`, `AD_HOC` và phí `GUEST`) luôn chuyển thẳng cho người thu (`treasurer_member_id` hoặc người ứng tiền `AD_HOC`). Công nợ Ăn nhậu chỉ đối soát chéo giữa các thành viên có phát sinh ăn nhậu.
+3. **Hybrid Cloud Firestore (Chính) + Google Sheets (10 Tabs Backup/Fallback):** Dữ liệu vận hành chính trên Firestore (~50–250ms, real-time), đồng bộ 2 chiều theo yêu cầu với Google Sheets qua `exportRawTables`/`importRawTables`. Trên Sheet tự động format plain text (`@`) cho các cột ID, ngày, `phone`, `email`, `bank_bin`, `account_no`, `issued_at`.
+4. **GAS làm Proxy AI/Drive & Fallback Backend:** Toàn bộ logic gửi ảnh Drive + gọi Gemini (`parseBillAI`) và chế độ fallback Google Sheets (`LockService`) đi qua Google Apps Script (`Code.gs`), hỗ trợ xác thực song song cả **Firebase ID Token** lẫn **GIS ID Token**.
 
 ---
 
@@ -35,15 +37,15 @@ Dự án xây dựng một Web Application tối ưu cho thiết bị di động
 
 ```mermaid
 flowchart LR
-    U_V["Viewer (Mobile / Desktop)"] --> FE["Frontend: React + Vite + TS + Tailwind (Vercel)"]
-    U_E["Editor (2-3 Quản lý)"] -->|"Google Identity Services + One Tap"| FE
+    U_V["Viewer (Ẩn danh)"] --> FE["Frontend: React + Vite + TS + Tailwind (Vercel)"]
+    U_E["Member / Editor / Admin"] -->|"Firebase Auth (Google Sign-In)"| FE
 
-    FE -->|"GET ?action=getAll (1 request gộp)\nPOST text/plain {action, idToken, payload}"| GAS["Backend: Google Apps Script (Code.gs)"]
+    FE -->|"Default: firebaseProvider + domainEngine.ts"| FS[("Cloud Firestore\n10 Collections + members_private + _meta")]
+    FE -.->|"parseBillAI / Fallback GAS / Manual Sync"| GAS["GAS Proxy & Fallback (Code.gs + AuthService.gs)"]
     FE -->|"Hiển thị ảnh QR trực tiếp"| VQR["VietQR Image CDN\n(img.vietqr.io)"]
 
-    GAS -->|"Xác thực ID Token"| OAUTH["Google OAuth2 TokenInfo API"]
-    GAS -->|"Cache 5 phút (vô hiệu khi ghi)"| CACHE["GAS CacheService"]
-    GAS -->|"Đọc / Ghi 11 Tabs\n(LockService 10s)"| GS["Google Sheets Database"]
+    GAS -->|"Verify Firebase / GIS Token"| OAUTH["Identity Toolkit / OAuth2"]
+    GAS -->|"Backup / Fallback 10 Tabs\n(LockService + CacheService)"| GS[("Google Sheets Database")]
     GAS -->|"Tạo subfolder YYYY-MM & lưu ảnh"| GD["Google Drive"]
     GAS -->|"Proxy Vision\n(Giấu GEMINI_API_KEY)"| GEM["Gemini API"]
 ```
@@ -54,24 +56,23 @@ flowchart LR
 caulong-nhau/
 ├── SPEC.md                          # Tài liệu đặc tả nguồn chân lý duy nhất
 ├── README.md                        # Hướng dẫn triển khai từ A-Z
-├── AUDIT_CHECKLIST.md               # Theo dõi cải tiến / nợ kỹ thuật / roadmap
-├── docs/                            # CALCULATION_AUDIT_CHECKLIST, FIREBASE_HYBRID_GUIDE, FIREBASE_HYBRID_PLAN
+├── docs/                            # FIREBASE_HYBRID_GUIDE.md, ROADMAP.md, CHANGELOG_AUDIT.md, adr/0001-firebase-hybrid.md
 ├── firebase/                        # firestore.rules, firestore.indexes.json
 ├── frontend/                        # Web App React + Vite + TypeScript + Tailwind (Deploy Vercel)
-│   ├── public/                      # Static assets, icons, manifest.json
+│   ├── public/                      # Static assets, icons (gồm icon.svg dùng trong manifest.json), manifest.json
 │   └── src/
 │       ├── components/              # Layout, VietQRModal, ReauthModal, EditorLoginButton, CardSkeleton...
-│       ├── contexts/                # AuthContext (localStorage + One Tap), ToastContext
-│       ├── hooks/                   # useClubData (getAll + SWR localStorage)
+│       ├── contexts/                # AuthContext (Firebase Auth + GIS fallback + localStorage), ToastContext
+│       ├── hooks/                   # useClubData (SWR localStorage + Firestore onSnapshot)
 │       ├── pages/                   # DashboardPage, CalendarPage, DebtsAndSessionsPage, MonthlyBadmintonPage, CreateSessionPage, SettingsPage
 │       ├── services/                # api.ts (facade), providerRegistry.ts, domainEngine.ts (logic dùng chung),
 │       │                            #   providers/ (firebase|gas|mock), firebase/config.ts, sync/manualSync.ts, mockData.ts
-│       ├── types/                   # index.ts (khớp 100% Schema 11 tabs & API Contract)
+│       ├── types/                   # index.ts (khớp 100% Schema 10 bảng + members_private & API Contract)
 │       └── utils/                   # badmintonCost.ts, monthlyBill.ts, drinkingSplit.ts, schedule.ts, debtSimplifier.ts, vietqr.ts, dateFilters.ts, imageCompress.ts, overdue.ts, zaloShare.ts, writeTracker.ts
-└── gas-backend/                     # Google Apps Script REST API
-    ├── Code.gs                      # Entrypoint doGet / doPost + CacheService wrapper
-    ├── AuthService.gs               # Verify Google ID Token + kiểm tra tab Editors
-    ├── SheetService.gs              # Schema 11 tabs, CRUD, nghiệp vụ Cầu lông / Ăn nhậu / Lịch / Tháng cầu
+└── gas-backend/                     # Google Apps Script REST API (AI Proxy + Sheets Sync + Fallback)
+    ├── Code.gs                      # Entrypoint doGet (strip PII) / doPost + CacheService wrapper
+    ├── AuthService.gs               # Verify song song Firebase ID Token & GIS ID Token + kiểm tra Editors
+    ├── SheetService.gs              # Schema 10 tabs, CRUD, nghiệp vụ parity 1-1 với domainEngine.ts
     ├── DriveService.gs              # Upload ảnh hóa đơn vào subfolder YYYY-MM
     ├── GeminiService.gs             # Bóc tách ảnh hóa đơn (parseBillImage)
     └── DEPLOY_GAS.md                # Hướng dẫn deploy GAS chi tiết
@@ -83,17 +84,17 @@ caulong-nhau/
 | Biến | Bắt buộc | Mô tả |
 | :--- | :--- | :--- |
 | `VITE_GAS_API_URL` | Có | URL Web App deployment của Google Apps Script (`https://script.google.com/macros/s/.../exec`) |
-| `VITE_GOOGLE_CLIENT_ID` | Có | OAuth 2.0 Client ID (Web Application) dùng cho Google Identity Services |
+| `VITE_GOOGLE_CLIENT_ID` | Khi dùng GIS thuần | OAuth 2.0 Client ID (Web Application) dùng cho Google Identity Services khi chưa bật Firebase |
 | `VITE_USE_MOCK` | Không | `true` = luôn chạy mock (bỏ qua `VITE_DB_PROVIDER`); production phải `false` |
 | `VITE_DB_PROVIDER` | Không | `firebase` \| `gas` \| `mock`. Trống: tự chọn firebase → gas → mock theo cấu hình có sẵn. Admin có thể override cục bộ (`cln_db_provider_override_v1`) |
 | `VITE_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` | Khi dùng Firebase | Cấu hình Firebase Web App |
 
-> **Kiến trúc Hybrid:** Cloud Firestore (11 collection + `_meta/sync_state`) là DB chính khi `firebase`; Google Sheets là nguồn gốc/backup/fallback, đồng bộ thủ công 2 chiều bởi `ADMIN` (`exportRawTables` / `importRawTables`). Logic nghiệp vụ dùng chung ở `services/domainEngine.ts`, song song với `SheetService.gs` — hai nơi phải luôn khớp. Ảnh hóa đơn & Gemini vẫn đi qua GAS.
+> **Kiến trúc Hybrid:** Cloud Firestore (10 collection nghiệp vụ + `members_private` + `_meta/sync_state`) là DB chính khi `firebase`; Google Sheets (10 tabs) là nguồn gốc/backup/fallback, đồng bộ thủ công 2 chiều bởi `ADMIN` (`exportRawTables` / `importRawTables`). Logic nghiệp vụ dùng chung ở `services/domainEngine.ts`, song song với `SheetService.gs` — hai nơi phải luôn khớp 1–1. Ảnh hóa đơn & Gemini vẫn đi qua GAS.
 
 #### GAS Backend (`PropertiesService.getScriptProperties()`)
 | Property Key | Bắt buộc | Mô tả |
 | :--- | :--- | :--- |
-| `SPREADSHEET_ID` | Có (nếu standalone) | ID của Google Sheet chứa 11 tabs dữ liệu (không bắt buộc nếu GAS gắn trực tiếp với Sheet) |
+| `SPREADSHEET_ID` | Có (nếu standalone) | ID của Google Sheet chứa 10 tabs dữ liệu (không bắt buộc nếu GAS gắn trực tiếp với Sheet) |
 | `ROOT_DRIVE_FOLDER_ID` | Có | ID thư mục gốc trên Google Drive dùng để tự động tạo subfolder `YYYY-MM` |
 | `GEMINI_API_KEY` | Có | API Key của Google Gemini (chỉ lưu ở Script Properties, không lộ ra Frontend) |
 | `GEMINI_MODEL` | Không | Tên model Gemini mặc định (VD: `gemini-2.5-flash`) |
@@ -134,7 +135,7 @@ caulong-nhau/
   - Chỉ tính phí **Vãng lai theo buổi** (`guest_fee`, mặc định `50000đ` cho khách `GUEST`) và **Sân thêm giờ** (tùy chọn, mặc định `0đ`, cộng thêm khi buổi đó đông phải thuê thêm sân/giờ — phần thêm giờ này sẽ được tự động tổng hợp làm gợi ý `suggestedPrevOvertime` cho hóa đơn đầu tháng kế tiếp).
 - **Buổi cầu phát sinh ngoài lịch (`billing_mode = AD_HOC`):**
   - Tính đầy đủ chi phí buổi: **Tiền sân** (`courtLines[]`: `số sân * số giờ * giá/giờ`, hỗ trợ thêm nhiều dòng Sân thêm giờ) + **Tiền cầu** (`shuttle_qty * shuttlePrice`) + **Chi phí khác** (`other_amount`), hỗ trợ ghi đè nhập tay độc lập cho `courtOverride`, `shuttleOverride`, `totalOverride`.
-- Khi ghi buổi Cầu lông (`createSession` / `updateSession`): **không tạo bút toán `Fund_Ledger` và không tạo khoản hoàn ứng chéo giữa các thành viên chính**. Nếu tạo buổi cố định từ ngoài trang Lịch trùng ngày `Schedule` còn mở (`!= CANCELLED`), hệ thống tự động khớp `plan_id` và chuyển lịch ngày đó sang `DONE`.
+- Khi ghi buổi Cầu lông (`createSession` / `updateSession`): **không tạo khoản hoàn ứng chéo giữa các thành viên chính**. Nếu tạo buổi cố định từ ngoài trang Lịch trùng ngày `Schedule` còn mở (`!= CANCELLED`), hệ thống tự động khớp `plan_id` và chuyển lịch ngày đó sang `DONE`. *(Lưu ý: tab `Fund_Ledger` cũ đã ngừng sử dụng ở v2.4).*
 
 #### B. Lập lịch Cầu lông theo tháng (`Schedule`) & Giờ hệ thống `Asia/Ho_Chi_Minh`
 - Toàn bộ hiển thị ngày/giờ hiện tại trên Frontend (`getNowVN`, `getTodayDateStr`, `formatTimeVN`, `Date.UTC` tính thứ) và Backend (`Utilities.formatDate(..., 'Asia/Ho_Chi_Minh', ...)`) chuẩn hóa theo múi giờ Việt Nam (`Asia/Ho_Chi_Minh`).
@@ -187,10 +188,10 @@ caulong-nhau/
 - **Công thức tính chia tiền (`calculateDrinkingSplit`):**
   1. Tổng chi phí bàn nhậu `total_amount` = tổng `Session_Items.amount` (nếu có khai báo `items`), hoặc `payload.totalAmount` nếu không tách dòng item (tự tạo 1 dòng `BILL` cho `payer_id`).
   2. Mỗi người có `contributed_amount` = tổng `amount` các dòng `Session_Items` của người đó.
-  3. Chia đều cho `attendee_count` người tham gia, làm tròn theo `rounding_unit`:
-     `per_person = Math.round(total_amount / attendee_count / unit) * unit`
+  3. Chia đều cho `attendee_count` người tham gia, **làm tròn lên** (`Math.ceil`) theo `rounding_unit`:
+     `per_person = Math.ceil(total_amount / attendee_count / unit) * unit`
   4. `net_amount = per_person - contributed_amount`:
-     - Điều chỉnh phần dư làm tròn vào `payer_id` (hoặc người góp nhiều nhất nếu `payer_id` không nằm trong danh sách tham gia) để **luôn giữ bất biến** $\sum \text{net\_amount} = 0$.
+     - Phần dư làm tròn (luôn khiến $\sum \text{net\_amount} \ge 0$ trước khi bù) được cộng về người góp nhiều nhất (ưu tiên `payer_id` nếu bằng nhau) để **người ứng tiền không bị hụt** và **luôn giữ bất biến** $\sum \text{net\_amount} = 0$.
      - Nếu `net_amount > 0`: thành viên **phải trả thêm** số tiền này (`is_paid = FALSE`).
      - Nếu `net_amount < 0`: thành viên **được nhận lại** `|net_amount|` (`is_paid = FALSE` cho tới khi các bên thanh toán).
      - Nếu `net_amount === 0`: tự động đánh dấu `is_paid = TRUE`.
@@ -223,14 +224,17 @@ caulong-nhau/
 
 ---
 
-## 6. Database Schema (Google Sheets — 11 Tabs)
+## 6. Database Schema (10 Bảng Nghiệp Vụ + `members_private` + `_meta`)
 
 Quy ước chung:
-- Dòng 1 là Header chính xác theo tên cột bên dưới.
-- Toàn bộ cột ID, ngày `YYYY-MM-DD`, tháng `YYYY-MM`, `phone`, `bank_bin`, `account_no` được hàm `setupDatabase()` đặt định dạng plain text (`@`) và đọc qua `normalizeCellValue_()` để không bao giờ bị mất số `0` đầu hay chuyển thành số khoa học (`E+`).
+- **Primary DB (Firestore):** 10 collection nghiệp vụ + `members_private/{member_id}` (lưu `phone`, `email` tách riêng khỏi `members`) + `_meta/sync_state` (`dataRevision` real-time). Security Rules chuẩn tại [firebase/firestore.rules](./firebase/firestore.rules).
+- **Google Sheets (10 tabs backup/fallback):** Dòng 1 là Header chính xác theo tên cột bên dưới. Toàn bộ cột ID, ngày `YYYY-MM-DD`, tháng `YYYY-MM`, `phone`, `bank_bin`, `account_no`, `email`, `issued_at` được hàm `setupDatabase()` đặt định dạng plain text (`@`) và đọc qua `normalizeCellValue_()` để không bao giờ bị mất số `0` đầu hay chuyển thành số khoa học (`E+`). Tab `Fund_Ledger` cũ nếu còn trên Sheet được giữ nguyên làm kho lưu trữ lịch sử, app không đọc/ghi.
 
-### 6.1. Tab `Members`
-`member_id`, `name`, `aliases`, `type` (`MAIN` | `GUEST`), `phone`, `email`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active`, `created_at`, `updated_at`
+### 6.1. Tab `Members` & Firestore `members` / `members_private`
+- **Google Sheet (`Members`):** `member_id`, `name`, `aliases`, `type` (`MAIN` | `GUEST`), `phone`, `email`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `is_active`, `created_at`, `updated_at`
+- **Firestore `members/{member_id}` (Công khai cho App & VietQR):** `member_id`, `name`, `aliases`, `type`, `bank_bin`, `bank_name`, `account_no`, `account_name`, `has_email`, `is_active`, `created_at`, `updated_at` *(KHÔNG chứa `phone`/`email`)*.
+- **Firestore `members_private/{member_id}` (Riêng tư — chỉ Editor hoặc chính chủ):** `member_id`, `phone`, `email`, `updated_at`.
+- **GAS `doGet` công khai:** luôn trả `phone: ""`, `email: ""`, `has_email: boolean`. Editor đọc dữ liệu riêng tư qua `POST getMembersPrivate`.
 
 ### 6.2. Tab `Sessions`
 `session_id`, `date`, `type` (`BADMINTON` | `DRINKING`), `title`, `total_amount`, `guest_fee`, `payer_id`, `per_person_amount`, `attendee_count`, `receipt_drive_id`, `receipt_url`, `receipt_summary`, `note`, `court_amount`, `shuttle_qty`, `shuttle_amount`, `other_amount`, `cost_detail` (JSON), `venue_type` (`RESTAURANT` | `HOME` | `""`), `plan_id`, `billing_mode` (`MONTHLY` | `AD_HOC` | `""`), `created_by`, `created_at`, `updated_at`
@@ -253,10 +257,7 @@ Quy ước chung:
 ### 6.8. Tab `Settlements` (Lịch sử gạch nợ)
 `settlement_id`, `from_member_id`, `to_member_id`, `amount`, `settled_at`, `method`, `category` (`BADMINTON` | `DRINKING`), `source_attendance_ids`, `source_ledger_ids`, `is_reconciled`, `transfer_content`, `note`, `confirmed_by`
 
-### 6.9. Tab `Fund_Ledger` (Lưu trữ lịch sử cũ — không dùng cho dòng tiền mới)
-`ledger_id`, `date`, `type`, `category`, `amount`, `member_id`, `session_id`, `attendance_id`, `period`, `is_paid`, `paid_at`, `settlement_id`, `receipt_drive_id`, `receipt_url`, `description`, `created_by`, `created_at`
-
-### 6.10. Tab `Settings`
+### 6.9. Tab `Settings`
 Cấu hình các khóa mặc định:
 
 | `key` | Giá trị mặc định | Mô tả |
@@ -273,7 +274,7 @@ Cấu hình các khóa mặc định:
 | `vietqr_template` | `compact2` | Template VietQR (`compact`, `compact2`, `qr_only`, `print`) |
 | `transfer_prefix` | `CLN` | Tiền tố nội dung chuyển khoản VietQR |
 
-### 6.11. Tab `Editors`
+### 6.10. Tab `Editors`
 `email`, `name`, `role` (`ADMIN` | `EDITOR`), `is_active`, `added_at`
 
 ---
@@ -290,13 +291,20 @@ Cấu hình các khóa mặc định:
   - Thanh toán: `confirmPayment` (alias `confirmSettlement`), `undoSettlement`.
   - Lịch tháng: `generateSchedule`, `updateScheduleDay`.
   - Hóa đơn Cầu lông tháng: `issueMonthlyBill`, `saveMonthlyContributions`, `markDuePaid`, `closeMonth`.
-  - Thành viên & Cài đặt: `upsertMember`, `updateSettings`.
+  - Thành viên & Cài đặt: `upsertMember`, `getMembersPrivate` (`Editor`), `updateSettings`.
   - AI Hóa đơn: `parseBillAI` (alias `parseReceipt`).
-  - Đồng bộ Sheet ↔ Firebase (`ADMIN`): `exportRawTables`, `importRawTables`.
+  - Đồng bộ Sheet ↔ Firebase (`ADMIN`): `exportRawTables`, `importRawTables` (10 bảng).
 
-> **Quy tắc làm tròn (đã triển khai):** hóa đơn tháng và buổi cầu phát sinh dùng `ceil` theo `rounding_unit`; chia Ăn nhậu dùng `round`, phần dư bù vào `payer_id`/người góp nhiều nhất để `Σ net_amount = 0`. *(Chờ xác nhận chủ đích — xem AUDIT_CHECKLIST.)*
+> **Quy tắc làm tròn (`Math.ceil` toàn dự án):** Toàn bộ phép chia tiền (hóa đơn cầu lông tháng, buổi cầu phát sinh `AD_HOC`, và chia tiền Ăn nhậu) đều dùng `Math.ceil` theo `rounding_unit` để người ứng tiền không bao giờ bị hụt; riêng Ăn nhậu cộng bù phần dư về người góp nhiều nhất (ưu tiên `payer_id` nếu hòa) để $\sum \text{net\_amount} = 0$.
 > **Tái dùng cột:** `Settlements.source_ledger_ids` dạng `REC:SET_1,SET_2` lưu các đợt chốt `SIMPLIFIED_TRANSFER` đã đối soát (không thêm trường mới).
-> **Quy tắc đã chốt** (xem `docs/CALCULATION_AUDIT_CHECKLIST.md` §1): vãng lai tính theo `paid_at` cho quỹ tháng; sửa buổi đã có `settlement_id` chỉ được đổi tiêu đề/ghi chú/ảnh; tạo/sửa buổi vào tháng `CLOSED` phải xác nhận cảnh báo.
+> **Quy tắc nghiệp vụ đã chốt (chi tiết tại [docs/CHANGELOG_AUDIT.md](./docs/CHANGELOG_AUDIT.md)):**
+> - **A1 (Vãng lai):** Tính vào quỹ tháng theo ngày thực thu (`paid_at`); tab Thống kê Vãng lai hiển thị rõ cả *Phát sinh theo buổi* lẫn *Thực thu tính quỹ tháng*.
+> - **A2 (Hoàn góp cầu cho người không đánh `MAIN`):** Chia toàn bộ tiền góp vào tổng `MAIN`, sinh mục `refundCredits` (Thủ quỹ hoàn riêng) và trừ khỏi `carry_out`.
+> - **A3 (`Sân thêm giờ`):** Tháng `OPEN` tính theo `estimate` chủ sân; toàn bộ `Sân thêm giờ` dồn sang `prevOvertimeFee` tháng kế tiếp.
+> - **A4 (Sửa buổi đã có `settlement_id`):** Chỉ cho sửa *Tiêu đề, Ghi chú, Ảnh hóa đơn*; khóa số tiền, ngày, người trả, người tham gia và món góp.
+> - **A5 (Buổi rơi vào tháng `CLOSED`):** Hiện cảnh báo xác nhận trước khi lưu, không chặn cứng.
+> - **Dashboard không đếm trùng:** Tháng đã phát hành/chốt hóa đơn chỉ tính `monthlyBill.actual_cost` (không cộng lại `total_amount` của các buổi `MONTHLY`).
+> - **`Monthly_Dues.issued_at`:** Lưu cố định ngày phát hành để không bị reset số ngày quá hạn khi ghi góp ống cầu giữa tháng.
 
 ---
 

@@ -2,9 +2,9 @@
  * drinkingSplit.ts
  * Chia tiền buổi ăn nhậu (ở quán hoặc tại nhà) có hỗ trợ nhiều người góp món/hóa đơn:
  * - Tổng buổi = Σ tất cả khoản góp (BILL + ITEM)
- * - Phần chia/người = round(Tổng buổi / số người, đơn vị làm tròn)
+ * - Phần chia/người = ceil(Tổng buổi / số người, đơn vị làm tròn) để người ứng tiền không bị hụt
  * - Số dư mỗi người = Phần chia - Tổng đã góp (> 0: phải trả thêm, < 0: được nhận lại)
- * - Bù sai số làm tròn vào người góp nhiều nhất (hoặc người đầu tiên) để tổng số dư luôn = 0
+ * - Bù sai số làm tròn vào người góp nhiều nhất (ưu tiên preferredPayerId nếu hòa) để tổng số dư luôn = 0
  */
 
 import type { SessionItemInput } from '../types';
@@ -28,7 +28,8 @@ export interface DrinkingSplitResult {
 export function calculateDrinkingSplit(
   attendeeIds: string[],
   items: SessionItemInput[],
-  roundingUnit = 1000
+  roundingUnit = 1000,
+  preferredPayerId?: string
 ): DrinkingSplitResult {
   const uniqueAttendees = Array.from(new Set(attendeeIds.map((id) => id.trim()).filter(Boolean)));
   const unit = Math.max(1, Math.round(Number(roundingUnit) || 1000));
@@ -63,7 +64,7 @@ export function calculateDrinkingSplit(
 
   const perPersonAmount =
     totalAmount > 0
-      ? Math.round(totalAmount / allParticipantIds.length / unit) * unit
+      ? Math.ceil(totalAmount / allParticipantIds.length / unit) * unit
       : 0;
 
   const splits: DrinkingPersonSplit[] = allParticipantIds.map((memberId) => {
@@ -78,15 +79,21 @@ export function calculateDrinkingSplit(
     };
   });
 
-  // Bù sai số làm tròn (nếu có) vào người góp nhiều nhất (hoặc người đầu tiên) để sum(netAmount) === 0
+  // Bù sai số làm tròn (nếu có) vào người góp nhiều nhất (ưu tiên preferredPayerId nếu hòa) để sum(netAmount) === 0
   const netSum = splits.reduce((acc, s) => acc + s.netAmount, 0);
   let roundingAdjustment = 0;
   let roundingAdjustedMemberId: string | null = null;
   if (netSum !== 0 && splits.length > 0) {
+    const prefId = String(preferredPayerId || '').trim();
     let targetIdx = 0;
     let maxContributed = -1;
     for (let i = 0; i < splits.length; i++) {
-      if (splits[i].contributedAmount > maxContributed) {
+      if (
+        splits[i].contributedAmount > maxContributed ||
+        (splits[i].contributedAmount === maxContributed &&
+          prefId &&
+          splits[i].memberId === prefId)
+      ) {
         maxContributed = splits[i].contributedAmount;
         targetIdx = i;
       }

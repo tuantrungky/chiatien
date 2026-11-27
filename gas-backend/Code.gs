@@ -55,6 +55,7 @@ function doGet(e) {
         data = {
           sessions: getSessionsList({
             type: params.type || params.category || 'ALL',
+            month: params.month,
             startDate: params.startDate,
             endDate: params.endDate
           })
@@ -200,6 +201,12 @@ function doPost(e) {
     if (action === 'getEditors') {
       return jsonResponse_(true, {
         editors: getEditorsList()
+      });
+    }
+
+    if (action === 'getMembersPrivate') {
+      return jsonResponse_(true, {
+        membersPrivate: getMembersPrivateList()
       });
     }
 

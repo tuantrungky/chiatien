@@ -13,6 +13,7 @@ import type {
   ManageEditorsPayload,
   MarkDuePaidPayload,
   Member,
+  MemberPrivateRecord,
   MonthlyBillData,
   ParseBillAIResponse,
   PeriodType,
@@ -67,23 +68,29 @@ import {
 } from '../mockData';
 import type { ClubDataset, DataProvider } from './types';
 
-let mockDataset: ClubDataset = {
-  settings: { ...initialMockSettings },
-  members: structuredClone(initialMockMembers),
-  schedule: structuredClone(initialMockSchedule),
-  sessions: structuredClone(initialMockSessions),
-  session_items: structuredClone(initialMockSessionItems),
-  attendance: structuredClone(initialMockAttendances),
-  monthly_bills: structuredClone(initialMockMonthlyBills),
-  monthly_dues: structuredClone(initialMockMonthlyDues),
-  settlements: structuredClone(initialMockSettlements),
-  editors: structuredClone(initialMockEditors),
-};
+function toPublicMembers(members: Member[], membersPrivate?: MemberPrivateRecord[]): Member[] {
+  const privById = new Map((membersPrivate || []).map((p) => [p.member_id, p]));
+  return members.map((m) => {
+    const priv = privById.get(m.member_id);
+    const { phone: _p, email: _e, ...rest } = m;
+    return {
+      ...rest,
+      has_email: Boolean(priv?.email || m.email || m.has_email),
+    };
+  });
+}
 
-export function resetMockDatasetForTest(): void {
-  mockDataset = {
+function buildInitialMockDataset(): ClubDataset {
+  const membersRaw = structuredClone(initialMockMembers);
+  return {
     settings: { ...initialMockSettings },
-    members: structuredClone(initialMockMembers),
+    members: toPublicMembers(membersRaw),
+    members_private: membersRaw.map((m) => ({
+      member_id: m.member_id,
+      phone: m.phone || '',
+      email: (m.email || '').toLowerCase(),
+      updated_at: m.updated_at,
+    })),
     schedule: structuredClone(initialMockSchedule),
     sessions: structuredClone(initialMockSessions),
     session_items: structuredClone(initialMockSessionItems),
@@ -93,6 +100,12 @@ export function resetMockDatasetForTest(): void {
     settlements: structuredClone(initialMockSettlements),
     editors: structuredClone(initialMockEditors),
   };
+}
+
+let mockDataset: ClubDataset = buildInitialMockDataset();
+
+export function resetMockDatasetForTest(): void {
+  mockDataset = buildInitialMockDataset();
 }
 
 function mockDelay<T>(value: T, ms = 120): Promise<T> {
@@ -114,13 +127,20 @@ export const mockProvider: DataProvider = {
   mode: 'mock',
 
   fetchAllData(periodType: PeriodType = 'MONTH', refDate?: string, month?: string): Promise<AllDataResponse> {
-    return mockDelay(buildAllData(mockDataset, periodType, refDate, month));
+    const res = buildAllData(mockDataset, periodType, refDate, month);
+    return mockDelay({
+      ...res,
+      bootstrap: {
+        ...res.bootstrap,
+        members: toPublicMembers(res.bootstrap.members, mockDataset.members_private),
+      },
+    });
   },
 
   fetchBootstrap(): Promise<BootstrapData> {
     return mockDelay({
       settings: { ...mockDataset.settings },
-      members: [...mockDataset.members],
+      members: toPublicMembers(mockDataset.members, mockDataset.members_private),
     });
   },
 
@@ -146,7 +166,12 @@ export const mockProvider: DataProvider = {
 
   verifyEditor(idToken: string): Promise<VerifyEditorResponse> {
     if (idToken === 'MOCK_MEMBER_ID_TOKEN') {
-      const linked = mockDataset.members.find((m) => m.email === 'member.mock@gmail.com');
+      const priv = (mockDataset.members_private || []).find(
+        (p) => p.email === 'member.mock@gmail.com'
+      );
+      const linked = priv
+        ? mockDataset.members.find((m) => m.member_id === priv.member_id)
+        : mockDataset.members.find((m) => m.email === 'member.mock@gmail.com');
       return mockDelay({
         authorized: true,
         isEditor: false,
@@ -278,6 +303,10 @@ export const mockProvider: DataProvider = {
     const plan = planUpsertMember(mockDataset, payload);
     mockDataset = applyMutationPlanToDataset(mockDataset, plan);
     return mockWriteDelay('upsertMember', plan.result);
+  },
+
+  fetchMembersPrivate(_idToken: string): Promise<MemberPrivateRecord[]> {
+    return mockDelay(structuredClone(mockDataset.members_private || []));
   },
 
   updateSettings(idToken: string, payload: UpdateSettingsPayload): Promise<{ settings: SettingsMap }> {

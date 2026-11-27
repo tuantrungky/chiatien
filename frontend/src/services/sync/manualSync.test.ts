@@ -23,21 +23,20 @@ function makeRawTables(): RawClubTables {
     monthly_bills: structuredClone(initialMockMonthlyBills),
     monthly_dues: structuredClone(initialMockMonthlyDues),
     settlements: structuredClone(initialMockSettlements),
-    fund_ledger: [],
     settings: [],
     editors: structuredClone(initialMockEditors),
   };
 }
 
 describe('manualSync helpers', () => {
-  it('computeTableComparisons tính đúng số lượng và chênh lệch cả 11 bảng', () => {
+  it('computeTableComparisons tính đúng số lượng và chênh lệch cả 10 bảng', () => {
     const fb = makeRawTables();
     const sheet = makeRawTables();
     fb.members.push({ ...fb.members[0], member_id: 'MEM_999' });
     sheet.sessions.pop();
 
     const rows = computeTableComparisons(fb, sheet);
-    expect(rows).toHaveLength(11);
+    expect(rows).toHaveLength(10);
     expect(rows.find((r) => r.table === 'members')?.diff).toBe(1);
     expect(rows.find((r) => r.table === 'sessions')?.diff).toBe(1);
     expect(rows.find((r) => r.table === 'editors')?.diff).toBe(0);

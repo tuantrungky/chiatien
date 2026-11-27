@@ -185,10 +185,6 @@ export function DashboardPage({
     () => badmintonPeriodSessions.filter((s) => s.billing_mode === 'AD_HOC').length,
     [badmintonPeriodSessions]
   );
-  const badmintonCostInPeriod = useMemo(
-    () => badmintonPeriodSessions.reduce((sum, s) => sum + s.total_amount, 0),
-    [badmintonPeriodSessions]
-  );
   const monthlyBillCostInPeriod = useMemo(() => {
     if (periodType === 'WEEK') return 0;
     if (periodType === 'MONTH' && monthlyBill?.month === refDate.slice(0, 7)) {
@@ -200,6 +196,27 @@ export function DashboardPage({
     }
     return dashboard?.badminton.monthlyBillCostInPeriod ?? 0;
   }, [periodType, monthlyBill, refDate, dashboard]);
+  const isCurrentMonthBillIssued =
+    periodType === 'MONTH' &&
+    monthlyBill?.month === refDate.slice(0, 7) &&
+    ((monthlyBill.dues?.length || 0) > 0 ||
+      (monthlyBill.bill?.billed_total ?? 0) > 0 ||
+      monthlyBill.bill?.status === 'CLOSED');
+  const badmintonCostInPeriod = useMemo(() => {
+    if (periodType !== 'WEEK' && periodType !== 'MONTH' && dashboard?.period.type === periodType) {
+      return Math.max(0, (dashboard.badminton.periodCost ?? 0) - monthlyBillCostInPeriod);
+    }
+    return badmintonPeriodSessions.reduce((sum, s) => {
+      if (isCurrentMonthBillIssued && s.billing_mode !== 'AD_HOC') return sum;
+      return sum + s.total_amount;
+    }, 0);
+  }, [
+    periodType,
+    dashboard,
+    monthlyBillCostInPeriod,
+    badmintonPeriodSessions,
+    isCurrentMonthBillIssued,
+  ]);
   const badmintonDisplayCost = badmintonCostInPeriod + monthlyBillCostInPeriod;
 
   const drinkingPeriodSessions = useMemo(
