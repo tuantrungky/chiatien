@@ -95,7 +95,7 @@
 Sau khi deploy xong, kiểm tra nhanh các bài test thực tế sau:
 
 - [ ] **1. Luồng Viewer ẩn danh & VietQR:** Mở link Vercel bằng **Tab ẩn danh** -> thấy ngay Tổng quan, Lịch tháng, Công nợ tách riêng Cầu lông / Ăn nhậu, Tháng cầu và mở được ảnh **VietQR** đúng số tiền/STK/nội dung không dấu; không thấy các nút Tạo/Sửa/Xóa/Gạch nợ.
-- [ ] **2. Đăng nhập Editor & `localStorage`:** Bấm **"Đăng nhập Editor"** -> chọn tài khoản Google trong tab `Editors` -> giữ phiên đăng nhập trong `localStorage` khi mở lại trình duyệt. Thử Gmail ngoài `Editors` -> bị từ chối (`403`).
+- [ ] **2. Đăng nhập Editor & `localStorage`:** Bấm **"Đăng nhập Editor"** -> chọn tài khoản Google trong tab `Editors` -> giữ phiên đăng nhập trong `localStorage` khi mở lại trình duyệt. Thử Gmail ngoài `Editors` -> đăng nhập với vai trò **`MEMBER`** (chỉ xem & tự liên kết tên), không thấy nút tạo/sửa/xóa và bị từ chối (`403`) nếu cố gọi thao tác ghi.
 - [ ] **3. Lịch tháng & Tạo buổi Cầu lông chi tiết:** Tạo lịch tháng trên tab **Lịch** -> bấm **"Điểm danh & Ghi buổi"** -> kiểm tra công thức `Tiền sân (+ Sân thêm giờ) + Tiền cầu + Chi phí khác`, tick tay & thêm nhanh vãng lai, sau khi lưu **KHÔNG** phát sinh chuyển khoản chéo giữa các thành viên `MAIN`.
 - [ ] **4. Hóa đơn Cầu lông tháng & Chuyển dư:** Vào tab **Tháng cầu** -> Phát hành hóa đơn tháng -> đánh dấu thành viên đã đóng -> thử Chốt tháng và kiểm tra `carry_out = carry_in + billed_total + guest_income - actual_cost`.
 - [ ] **5. Buổi Ăn nhậu góp món & Tách nợ:** Tạo buổi Ăn nhậu kiểu `HOME` hoặc `RESTAURANT` có thành viên góp món (`Session_Items`) -> kiểm tra nợ tối ưu **chỉ nằm ở nhóm Ăn nhậu** và cấn trừ đúng `per_person - contributed_amount`.

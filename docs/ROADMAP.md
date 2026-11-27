@@ -8,10 +8,10 @@ Tài liệu theo dõi **Nợ kỹ thuật cần dọn dẹp** và **Lộ trình 
 
 - [ ] **Tách monolith Backend GAS:** Tách [SheetService.gs](../gas-backend/SheetService.gs) (>4.500 dòng) thành các module nhỏ (`SchemaService.gs`, `SessionService.gs`, `MonthlyBillService.gs`, `DebtService.gs`, `SyncService.gs`) để dễ bảo trì trên Apps Script IDE.
 - [ ] **Chia chunk khi Push `importRawTables` lên GAS:** Hiện `importRawTablesRecord` ghi tuần tự 10 tab trong 1 request; khi dữ liệu lớn dần qua nhiều năm cần tách gọi từng bảng để tránh nguy cơ chạm giới hạn 6 phút của GAS.
-- [ ] **Tách nhỏ các Modal trong Pages:** Tách các modal ở `MonthlyBadmintonPage.tsx`, `CreateSessionPage.tsx`, `DebtsAndSessionsPage.tsx`, `SettingsPage.tsx` thành component con riêng.
-- [ ] **Tối ưu bundle Frontend:** Dynamic import phần `mockProvider` / `mockData` khi `VITE_USE_MOCK=true` để giảm kích thước bundle production.
-- [ ] **Dọn `icon.svg` (chỉ làm khi bỏ khỏi PWA manifest):** Không xóa [frontend/public/icon.svg](../frontend/public/icon.svg) vì [manifest.json](../frontend/public/manifest.json) vẫn đang tham chiếu trực tiếp tới `/icon.svg`. Nếu muốn bỏ, phải cập nhật `manifest.json` trước.
-- [ ] **Giảm rủi ro xung đột ghi đồng thời trên Firestore:** Bổ sung `runTransaction` hoặc cơ chế kiểm tra `dataRevision` lạc quan cho các thao tác nhạy cảm (`confirmPayment`, `undoSettlement`, `issueMonthlyBill`).
+- [x] **Tách nhỏ các Modal trong Pages:** Đã tách 5 modal của `MonthlyBadmintonPage.tsx` và `CalendarPage.tsx` thành các component độc lập trong `frontend/src/components/monthly/` và `frontend/src/components/calendar/` (`CreateSessionPage`, `DebtsAndSessionsPage`, `SettingsPage` không chứa modal nhúng).
+- [x] **Tối ưu bundle Frontend:** Đã dynamic import `firebaseProvider` & `mockProvider` trong [api.ts](../frontend/src/services/api.ts), lazy-load toàn bộ 6 route trang trong [App.tsx](../frontend/src/App.tsx) và cấu hình `manualChunks` trong [vite.config.ts](../frontend/vite.config.ts).
+- [x] **Dọn `icon.svg`:** Đã gỡ khỏi [manifest.json](../frontend/public/manifest.json) và xóa `frontend/public/icon.svg` (giữ `icon-192.png`, `icon-512.png`, `apple-touch-icon.png`).
+- [x] **Giảm rủi ro xung đột ghi đồng thời trên Firestore:** Đã bổ sung `runTransaction` + kiểm tra lạc quan `dataRevision` ([optimisticLock.ts](../frontend/src/utils/optimisticLock.ts)) cho các thao tác tài chính nhạy cảm (`confirmPayment`, `undoSettlement`, `issueMonthlyBill`, `markDuePaid`, `closeMonth`).
 
 ---
 

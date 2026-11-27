@@ -59,7 +59,7 @@ caulong-nhau/
 ├── docs/                            # FIREBASE_HYBRID_GUIDE.md, ROADMAP.md, CHANGELOG_AUDIT.md, adr/0001-firebase-hybrid.md
 ├── firebase/                        # firestore.rules, firestore.indexes.json
 ├── frontend/                        # Web App React + Vite + TypeScript + Tailwind (Deploy Vercel)
-│   ├── public/                      # Static assets, icons (gồm icon.svg dùng trong manifest.json), manifest.json
+│   ├── public/                      # Static assets, icons (icon-192.png, icon-512.png, apple-touch-icon.png), manifest.json
 │   └── src/
 │       ├── components/              # Layout, VietQRModal, ReauthModal, EditorLoginButton, CardSkeleton...
 │       ├── contexts/                # AuthContext (Firebase Auth + GIS fallback + localStorage), ToastContext
@@ -109,7 +109,7 @@ caulong-nhau/
 | Vai trò | Điều kiện truy cập | Quyền hạn |
 | :--- | :--- | :--- |
 | **Viewer** | Không cần đăng nhập | Xem `Tổng quan`, `Lịch` cầu lông & ăn nhậu, `Công nợ` tách riêng Cầu lông / Ăn nhậu + cảnh báo quá hạn + `Lịch sử buổi`, `Tháng cầu` (hóa đơn tháng & thống kê vãng lai), lọc `"Tôi là ai?"` (`localStorage`), Copy tin nhắn Zalo, mở **VietQR**. |
-| **Member** | Đăng nhập Google (`verifyUser` trả `role = MEMBER`, `isEditor = false`) | Toàn bộ quyền Viewer + tự liên kết `Members.email` trên Google Sheet qua `MemberIdentityModal` (`linkMemberEmail`) để đồng bộ tên thành viên trên mọi thiết bị. |
+| **Member** | Đăng nhập Google (`verifyUser` trả `role = MEMBER`, `isEditor = false`) | Toàn bộ quyền Viewer + tự liên kết email của chính mình vào `members_private/{member_id}.email` trên Firestore (hoặc `Members.email` khi chạy fallback GAS) qua `MemberIdentityModal` (`linkMemberEmail`) để đồng bộ tên thành viên trên mọi thiết bị. |
 | **Editor** | Đăng nhập Google + email nằm trong tab `Editors` (`is_active = TRUE`) | Toàn bộ quyền Viewer + Tạo/Sửa/Xóa buổi (`BADMINTON`, `DRINKING`), Chụp ảnh hóa đơn AI, Lập/Sửa lịch tháng (`Schedule`), Phát hành/Chốt hóa đơn tháng (`Monthly_Bills`), Xác nhận & Hoàn tác gạch nợ (`undoSettlement`), Quản lý `Members` và `Settings`. |
 
 > **Phân cấp nội bộ trong tab `Editors`:**

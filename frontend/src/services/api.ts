@@ -2,6 +2,7 @@
  * api.ts
  * Facade điều phối các API Đọc/Ghi tới đúng DataProvider đang hoạt động
  * (Firebase Firestore | Google Sheets GAS | Mock Demo), giữ nguyên 100% chữ ký hàm cho toàn bộ UI.
+ * Tải động (dynamic import) firebaseProvider & mockProvider để giảm kích thước bundle khởi đầu.
  */
 
 import type {
@@ -36,9 +37,7 @@ import type {
   VerifyEditorResponse,
 } from '../types';
 import { getActiveProviderMode } from './providerRegistry';
-import { firebaseProvider } from './providers/firebaseProvider';
 import { gasProvider } from './providers/gasProvider';
-import { mockProvider } from './providers/mockProvider';
 import { ApiClientError, type DataProvider, type DbProviderMode } from './providers/types';
 
 export { ApiClientError };
@@ -50,177 +49,218 @@ export function isMockMode(): boolean {
   return getActiveProviderMode() === 'mock';
 }
 
-export function getActiveProvider(mode: DbProviderMode = getActiveProviderMode()): DataProvider {
-  if (mode === 'firebase') return firebaseProvider;
-  if (mode === 'gas') return gasProvider;
-  return mockProvider;
+let firebaseProviderPromise: Promise<DataProvider> | null = null;
+let mockProviderPromise: Promise<DataProvider> | null = null;
+
+async function resolveProvider(
+  mode: DbProviderMode = getActiveProviderMode()
+): Promise<DataProvider> {
+  if (mode === 'firebase') {
+    if (!firebaseProviderPromise) {
+      firebaseProviderPromise = import('./providers/firebaseProvider').then(
+        (m) => m.firebaseProvider
+      );
+    }
+    return firebaseProviderPromise;
+  }
+  if (mode === 'mock') {
+    if (!mockProviderPromise) {
+      mockProviderPromise = import('./providers/mockProvider').then((m) => m.mockProvider);
+    }
+    return mockProviderPromise;
+  }
+  return gasProvider;
+}
+
+export function getActiveProvider(
+  mode: DbProviderMode = getActiveProviderMode()
+): Promise<DataProvider> {
+  return resolveProvider(mode);
 }
 
 export function subscribeClubChanges(onRevision: (rev: number) => void): () => void {
-  const provider = getActiveProvider();
-  return provider.subscribeChanges ? provider.subscribeChanges(onRevision) : () => {};
+  if (getActiveProviderMode() !== 'firebase') return () => {};
+  let disposed = false;
+  let unsubscribeInner: (() => void) | null = null;
+
+  void resolveProvider('firebase')
+    .then((provider) => {
+      if (disposed || !provider.subscribeChanges) return;
+      unsubscribeInner = provider.subscribeChanges(onRevision);
+    })
+    .catch(() => {
+      // Ignore lazy-load failure for optional realtime listener
+    });
+
+  return () => {
+    disposed = true;
+    if (unsubscribeInner) {
+      unsubscribeInner();
+      unsubscribeInner = null;
+    }
+  };
 }
 
 // ============================================================================
 // PUBLIC READ APIs (Viewer)
 // ============================================================================
 
-export function fetchAllData(
+export async function fetchAllData(
   periodType: PeriodType = 'MONTH',
   refDate?: string,
   month?: string
 ): Promise<AllDataResponse> {
-  return getActiveProvider().fetchAllData(periodType, refDate, month);
+  return (await resolveProvider()).fetchAllData(periodType, refDate, month);
 }
 
-export function fetchBootstrap(): Promise<BootstrapData> {
-  return getActiveProvider().fetchBootstrap();
+export async function fetchBootstrap(): Promise<BootstrapData> {
+  return (await resolveProvider()).fetchBootstrap();
 }
 
-export function fetchSessionDetail(sessionId: string): Promise<SessionDetailData> {
-  return getActiveProvider().fetchSessionDetail(sessionId);
+export async function fetchSessionDetail(sessionId: string): Promise<SessionDetailData> {
+  return (await resolveProvider()).fetchSessionDetail(sessionId);
 }
 
-export function fetchSchedule(month: string): Promise<ScheduleData> {
-  return getActiveProvider().fetchSchedule(month);
+export async function fetchSchedule(month: string): Promise<ScheduleData> {
+  return (await resolveProvider()).fetchSchedule(month);
 }
 
-export function fetchMonthlyBill(month: string): Promise<MonthlyBillData> {
-  return getActiveProvider().fetchMonthlyBill(month);
+export async function fetchMonthlyBill(month: string): Promise<MonthlyBillData> {
+  return (await resolveProvider()).fetchMonthlyBill(month);
 }
 
-export function fetchGuestStats(month: string): Promise<GuestStatsData> {
-  return getActiveProvider().fetchGuestStats(month);
+export async function fetchGuestStats(month: string): Promise<GuestStatsData> {
+  return (await resolveProvider()).fetchGuestStats(month);
 }
 
-export function fetchDebts(): Promise<SeparatedDebtsData> {
-  return getActiveProvider().fetchDebts();
+export async function fetchDebts(): Promise<SeparatedDebtsData> {
+  return (await resolveProvider()).fetchDebts();
 }
 
 // ============================================================================
 // EDITOR AUTH, AI & WRITE APIs
 // ============================================================================
 
-export function verifyEditor(idToken: string): Promise<VerifyEditorResponse> {
-  return getActiveProvider().verifyEditor(idToken);
+export async function verifyEditor(idToken: string): Promise<VerifyEditorResponse> {
+  return (await resolveProvider()).verifyEditor(idToken);
 }
 
-export function linkMemberEmail(
+export async function linkMemberEmail(
   idToken: string,
   memberId: string
 ): Promise<{ linkedMemberId: string; email: string }> {
-  return getActiveProvider().linkMemberEmail(idToken, memberId);
+  return (await resolveProvider()).linkMemberEmail(idToken, memberId);
 }
 
-export function undoSettlement(
+export async function undoSettlement(
   idToken: string,
   settlementId: string
 ): Promise<{ undoneSettlementId: string; updatedDebts: SeparatedDebtsData }> {
-  return getActiveProvider().undoSettlement(idToken, settlementId);
+  return (await resolveProvider()).undoSettlement(idToken, settlementId);
 }
 
-export function parseBillAI(
+export async function parseBillAI(
   idToken: string,
   payload: { base64Image: string; mimeType: string; sessionDate?: string }
 ): Promise<ParseBillAIResponse> {
-  return getActiveProvider().parseBillAI(idToken, payload);
+  return (await resolveProvider()).parseBillAI(idToken, payload);
 }
 
-export function createSession(
+export async function createSession(
   idToken: string,
   payload: CreateSessionPayload
 ): Promise<CreateSessionResponse> {
-  return getActiveProvider().createSession(idToken, payload);
+  return (await resolveProvider()).createSession(idToken, payload);
 }
 
-export function updateSession(
+export async function updateSession(
   idToken: string,
   payload: UpdateSessionPayload
 ): Promise<{ session: Session }> {
-  return getActiveProvider().updateSession(idToken, payload);
+  return (await resolveProvider()).updateSession(idToken, payload);
 }
 
-export function deleteSession(
+export async function deleteSession(
   idToken: string,
   sessionId: string
 ): Promise<{ deletedSessionId: string }> {
-  return getActiveProvider().deleteSession(idToken, sessionId);
+  return (await resolveProvider()).deleteSession(idToken, sessionId);
 }
 
-export function confirmPayment(
+export async function confirmPayment(
   idToken: string,
   payload: ConfirmPaymentPayload
 ): Promise<ConfirmPaymentResponse> {
-  return getActiveProvider().confirmPayment(idToken, payload);
+  return (await resolveProvider()).confirmPayment(idToken, payload);
 }
 
-export function generateSchedule(
+export async function generateSchedule(
   idToken: string,
   payload: GenerateSchedulePayload
 ): Promise<ScheduleData> {
-  return getActiveProvider().generateSchedule(idToken, payload);
+  return (await resolveProvider()).generateSchedule(idToken, payload);
 }
 
-export function updateScheduleDay(
+export async function updateScheduleDay(
   idToken: string,
   payload: UpdateScheduleDayPayload
 ): Promise<{ schedule?: ScheduleData; deletedPlanId?: string }> {
-  return getActiveProvider().updateScheduleDay(idToken, payload);
+  return (await resolveProvider()).updateScheduleDay(idToken, payload);
 }
 
-export function issueMonthlyBill(
+export async function issueMonthlyBill(
   idToken: string,
   payload: IssueMonthlyBillPayload
 ): Promise<MonthlyBillData> {
-  return getActiveProvider().issueMonthlyBill(idToken, payload);
+  return (await resolveProvider()).issueMonthlyBill(idToken, payload);
 }
 
-export function saveMonthlyContributions(
+export async function saveMonthlyContributions(
   idToken: string,
   payload: SaveMonthlyContributionsPayload
 ): Promise<MonthlyBillData> {
-  return getActiveProvider().saveMonthlyContributions(idToken, payload);
+  return (await resolveProvider()).saveMonthlyContributions(idToken, payload);
 }
 
-export function markDuePaid(
+export async function markDuePaid(
   idToken: string,
   payload: MarkDuePaidPayload
 ): Promise<{ monthlyBill: MonthlyBillData; debts: SeparatedDebtsData }> {
-  return getActiveProvider().markDuePaid(idToken, payload);
+  return (await resolveProvider()).markDuePaid(idToken, payload);
 }
 
-export function closeMonth(
+export async function closeMonth(
   idToken: string,
   payload: CloseMonthPayload
 ): Promise<MonthlyBillData> {
-  return getActiveProvider().closeMonth(idToken, payload);
+  return (await resolveProvider()).closeMonth(idToken, payload);
 }
 
-export function upsertMember(
+export async function upsertMember(
   idToken: string,
   payload: UpsertMemberPayload
 ): Promise<{ member: Member }> {
-  return getActiveProvider().upsertMember(idToken, payload);
+  return (await resolveProvider()).upsertMember(idToken, payload);
 }
 
-export function fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]> {
-  return getActiveProvider().fetchMembersPrivate(idToken);
+export async function fetchMembersPrivate(idToken: string): Promise<MemberPrivateRecord[]> {
+  return (await resolveProvider()).fetchMembersPrivate(idToken);
 }
 
-export function updateSettings(
+export async function updateSettings(
   idToken: string,
   payload: UpdateSettingsPayload
 ): Promise<{ settings: SettingsMap }> {
-  return getActiveProvider().updateSettings(idToken, payload);
+  return (await resolveProvider()).updateSettings(idToken, payload);
 }
 
-export function fetchEditors(idToken: string): Promise<Editor[]> {
-  return getActiveProvider().fetchEditors(idToken);
+export async function fetchEditors(idToken: string): Promise<Editor[]> {
+  return (await resolveProvider()).fetchEditors(idToken);
 }
 
-export function manageEditors(
+export async function manageEditors(
   idToken: string,
   payload: ManageEditorsPayload
 ): Promise<Editor[]> {
-  return getActiveProvider().manageEditors(idToken, payload);
+  return (await resolveProvider()).manageEditors(idToken, payload);
 }

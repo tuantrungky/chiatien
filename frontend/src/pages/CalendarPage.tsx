@@ -8,9 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  Clock,
   Edit3,
-  Loader2,
   Plus,
   RotateCcw,
   Trash2,
@@ -19,9 +17,11 @@ import {
   Utensils,
   X,
 } from 'lucide-react';
+import { GenerateScheduleModal } from '../components/calendar/GenerateScheduleModal';
+import { ScheduleDayModal } from '../components/calendar/ScheduleDayModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { generateSchedule, updateScheduleDay } from '../services/api';
+import { updateScheduleDay } from '../services/api';
 import type {
   Member,
   ScheduleData,
@@ -50,15 +50,6 @@ interface CalendarPageProps {
 
 const WEEKDAY_LABELS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 const WEEKDAY_VN_NAMES = ['CN', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
-const WEEKDAY_OPTIONS = [
-  { val: 1, label: 'T2' },
-  { val: 2, label: 'T3' },
-  { val: 3, label: 'T4' },
-  { val: 4, label: 'T5' },
-  { val: 5, label: 'T6' },
-  { val: 6, label: 'T7' },
-  { val: 0, label: 'CN' },
-];
 
 function shiftMonthStr(monthStr: string, delta: number): string {
   const [y, m] = monthStr.split('-').map(Number);
@@ -95,28 +86,11 @@ export function CalendarPage({
   const [editingPlan, setEditingPlan] = useState<ScheduleDay | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Form Tạo lịch tháng tự động
+  // Danh sách thành viên chính phục vụ modal Tạo lịch / Sửa ngày lẻ
   const mainMembers = useMemo(
     () => members.filter((m) => m.is_active && m.type === 'MAIN'),
     [members]
   );
-  const [weekdays, setWeekdays] = useState<number[]>([1, 3, 5]); // T2, T4, T6
-  const [startTime, setStartTime] = useState('20:00');
-  const [endTime, setEndTime] = useState('21:30');
-  const [courts, setCourts] = useState(String(settings.default_court_count || 2));
-  const [plannedIds, setPlannedIds] = useState<string[]>(() =>
-    mainMembers.map((m) => m.member_id)
-  );
-  const [onlyFromToday, setOnlyFromToday] = useState(false);
-
-  // Form Thêm / Sửa 1 ngày lẻ
-  const [singleStart, setSingleStart] = useState('20:00');
-  const [singleEnd, setSingleEnd] = useState('21:30');
-  const [singleCourts, setSingleCourts] = useState(String(settings.default_court_count || 2));
-  const [singlePlannedIds, setSinglePlannedIds] = useState<string[]>(() =>
-    mainMembers.map((m) => m.member_id)
-  );
-  const [singleNote, setSingleNote] = useState('');
 
   const membersMap = useMemo(() => {
     const map = new Map<string, Member>();
@@ -231,99 +205,19 @@ export function CalendarPage({
   };
 
   const handleOpenGenModal = () => {
-    setPlannedIds(mainMembers.map((m) => m.member_id));
-    setCourts(String(settings.default_court_count || 2));
-    setOnlyFromToday(activeMonth === todayStr.slice(0, 7));
     setGenModalOpen(true);
   };
 
   const handleOpenAddSingleModal = () => {
     setMobileSheetOpen(false);
     setEditingPlan(null);
-    setSingleStart('20:00');
-    setSingleEnd('21:30');
-    setSingleCourts(String(settings.default_court_count || 2));
-    setSinglePlannedIds(mainMembers.map((m) => m.member_id));
-    setSingleNote('');
     setDayModalOpen(true);
   };
 
   const handleOpenEditSingleModal = (plan: ScheduleDay) => {
     setMobileSheetOpen(false);
     setEditingPlan(plan);
-    setSingleStart(plan.start_time || '20:00');
-    setSingleEnd(plan.end_time || '21:30');
-    setSingleCourts(String(plan.courts || settings.default_court_count || 2));
-    const parsedIds = plan.planned_member_ids
-      ? plan.planned_member_ids
-          .split(',')
-          .map((x) => x.trim())
-          .filter(Boolean)
-      : mainMembers.map((m) => m.member_id);
-    setSinglePlannedIds(parsedIds);
-    setSingleNote(plan.note || '');
     setDayModalOpen(true);
-  };
-
-  const handleGenerateSchedule = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!idToken || busy) return;
-    if (weekdays.length === 0) {
-      toast.error('Hãy chọn ít nhất 1 thứ trong tuần.');
-      return;
-    }
-
-    setBusy(true);
-    try {
-      await generateSchedule(idToken, {
-        month: activeMonth,
-        weekdays,
-        startTime,
-        endTime,
-        courts: Math.max(1, Number(courts) || 2),
-        plannedMemberIds: plannedIds,
-        fromDate: onlyFromToday ? todayStr : undefined,
-      });
-      setGenModalOpen(false);
-      await onRefreshAll();
-      toast.success(`Đã tạo lịch cố định cho tháng ${activeMonth.slice(5, 7)}/${activeMonth.slice(0, 4)}.`);
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSaveSingleDay = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!idToken || busy) return;
-    setBusy(true);
-    try {
-      await updateScheduleDay(idToken, {
-        operation: 'UPSERT',
-        planId: editingPlan?.plan_id,
-        date: editingPlan?.date || selectedDate,
-        startTime: singleStart,
-        endTime: singleEnd,
-        courts: Math.max(1, Number(singleCourts) || 2),
-        plannedMemberIds: singlePlannedIds,
-        status: editingPlan?.status || 'PLANNED',
-        note: singleNote,
-      });
-      setDayModalOpen(false);
-      setEditingPlan(null);
-      setSingleNote('');
-      await onRefreshAll();
-      toast.success(
-        editingPlan
-          ? `Đã cập nhật lịch ngày ${formatDateVN(editingPlan.date)}.`
-          : `Đã thêm lịch ngày ${formatDateVN(selectedDate)}.`
-      );
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const handleUpdatePlanStatus = async (plan: ScheduleDay, nextStatus: ScheduleStatus) => {
@@ -1023,265 +917,29 @@ export function CalendarPage({
 
       {/* Modal Tạo lịch tháng cố định (Editor) */}
       {genModalOpen && isEditor && (
-        <div
-          className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={() => setGenModalOpen(false)}
-        >
-          <form
-            onSubmit={handleGenerateSchedule}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Tạo lịch cố định Tháng {activeMonth.slice(5, 7)}/{activeMonth.slice(0, 4)}
-                </h3>
-                <p className="text-xs text-slate-500">Sinh tự động các buổi theo thứ trong tuần</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGenModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                Chọn ngày đánh trong tuần
-              </label>
-              <div className="grid grid-cols-7 gap-1">
-                {WEEKDAY_OPTIONS.map((opt) => {
-                  const active = weekdays.includes(opt.val);
-                  return (
-                    <button
-                      key={opt.val}
-                      type="button"
-                      onClick={() =>
-                        setWeekdays((prev) =>
-                          prev.includes(opt.val)
-                            ? prev.filter((x) => x !== opt.val)
-                            : [...prev, opt.val]
-                        )
-                      }
-                      className={`py-2 rounded-xl text-xs font-bold cursor-pointer ${
-                        active
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  <Clock className="w-3 h-3 inline mr-1" />
-                  Bắt đầu
-                </label>
-                <input
-                  type="time"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Kết thúc</label>
-                <input
-                  type="time"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Số sân</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={courts}
-                  onChange={(e) => setCourts(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={onlyFromToday}
-                onChange={(e) => setOnlyFromToday(e.target.checked)}
-                className="accent-emerald-600"
-              />
-              <span>Chỉ tạo từ hôm nay ({formatDateVN(todayStr)}) trở đi</span>
-            </label>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                Thành viên chính dự kiến ({plannedIds.length}/{mainMembers.length})
-              </label>
-              <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
-                {mainMembers.map((m) => {
-                  const checked = plannedIds.includes(m.member_id);
-                  return (
-                    <label
-                      key={m.member_id}
-                      className="flex items-center gap-2 text-xs font-semibold bg-slate-50 px-2.5 py-1.5 rounded-lg cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setPlannedIds((prev) =>
-                            prev.includes(m.member_id)
-                              ? prev.filter((id) => id !== m.member_id)
-                              : [...prev, m.member_id]
-                          )
-                        }
-                        className="accent-emerald-600"
-                      />
-                      <span className="truncate">{m.name}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-            >
-              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              <span>{busy ? 'Đang sinh lịch...' : 'Sinh lịch tháng này'}</span>
-            </button>
-          </form>
-        </div>
+        <GenerateScheduleModal
+          activeMonth={activeMonth}
+          todayStr={todayStr}
+          mainMembers={mainMembers}
+          defaultCourts={settings.default_court_count || 2}
+          onClose={() => setGenModalOpen(false)}
+          onSuccess={onRefreshAll}
+        />
       )}
 
       {/* Modal Thêm / Sửa 1 ngày lịch lẻ */}
       {dayModalOpen && isEditor && (
-        <div
-          className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={() => {
+        <ScheduleDayModal
+          selectedDate={selectedDate}
+          editingPlan={editingPlan}
+          mainMembers={mainMembers}
+          defaultCourts={settings.default_court_count || 2}
+          onClose={() => {
             setDayModalOpen(false);
             setEditingPlan(null);
           }}
-        >
-          <form
-            onSubmit={handleSaveSingleDay}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-3.5 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900">
-                {editingPlan
-                  ? `Sửa lịch ngày ${formatDateVN(editingPlan.date)}`
-                  : `Thêm lịch ngày ${formatDateVN(selectedDate)}`}
-              </h3>
-              <button
-                type="button"
-                onClick={() => {
-                  setDayModalOpen(false);
-                  setEditingPlan(null);
-                }}
-                className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  Bắt đầu
-                </label>
-                <input
-                  type="time"
-                  value={singleStart}
-                  onChange={(e) => setSingleStart(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  Kết thúc
-                </label>
-                <input
-                  type="time"
-                  value={singleEnd}
-                  onChange={(e) => setSingleEnd(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  Số sân
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  value={singleCourts}
-                  onChange={(e) => setSingleCourts(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                Thành viên chính dự kiến ({singlePlannedIds.length}/{mainMembers.length})
-              </label>
-              <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
-                {mainMembers.map((m) => {
-                  const checked = singlePlannedIds.includes(m.member_id);
-                  return (
-                    <label
-                      key={m.member_id}
-                      className="flex items-center gap-2 text-xs font-semibold bg-slate-50 px-2.5 py-1.5 rounded-lg cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setSinglePlannedIds((prev) =>
-                            prev.includes(m.member_id)
-                              ? prev.filter((id) => id !== m.member_id)
-                              : [...prev, m.member_id]
-                          )
-                        }
-                        className="accent-emerald-600"
-                      />
-                      <span className="truncate">{m.name}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            <input
-              type="text"
-              value={singleNote}
-              onChange={(e) => setSingleNote(e.target.value)}
-              placeholder="Ghi chú (tùy chọn)"
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
-            />
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
-            >
-              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{busy ? 'Đang lưu...' : 'Lưu vào lịch'}</span>
-            </button>
-          </form>
-        </div>
+          onSuccess={onRefreshAll}
+        />
       )}
     </div>
   );

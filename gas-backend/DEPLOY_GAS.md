@@ -106,7 +106,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 1. Trên góc phải Apps Script IDE, bấm nút **Deploy** -> **New deployment**.
 2. Bấm biểu tượng bánh răng bên cạnh **Select type** -> chọn **Web app**.
 3. Điền cấu hình:
-   - **Description**: `v2.0 - Schedule, Monthly Badminton Billing & Separated Debts`
+   - **Description**: `v2.4 - Hybrid Firebase Auth, Privacy (members_private) & Math.ceil`
    - **Execute as**: **Me** *(rất quan trọng: giúp Viewer không cần đăng nhập vẫn đọc được dữ liệu thông qua quyền của bạn)*
    - **Who has access**: **Anyone** *(bắt buộc để Frontend trên Vercel gọi được mà không bị chặn trang đăng nhập Google)*
 4. Bấm **Deploy** -> copy **Web app URL** (có dạng `https://script.google.com/macros/s/AKfycb.../exec`).

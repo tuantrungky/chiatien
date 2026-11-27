@@ -8,11 +8,13 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   where,
   writeBatch,
   type DocumentData,
   type QuerySnapshot,
 } from 'firebase/firestore';
+import { assertOptimisticRevision } from '../../utils/optimisticLock';
 import type {
   AllDataResponse,
   Attendance,
@@ -309,10 +311,11 @@ async function commitOpsInChunks(ops: BatchOp[]): Promise<void> {
   }
 }
 
-async function commitMutationPlan(
+function collectPlanOps(
   plan: BatchMutationPlan<unknown>,
-  actorEmail: string
-): Promise<void> {
+  actorEmail: string,
+  nextRevision?: number
+): BatchOp[] {
   const ops: BatchOp[] = [];
 
   for (const [col, ids] of Object.entries(plan.deletes) as Array<[CollectionKey, string[] | undefined]>) {
@@ -336,7 +339,7 @@ async function commitMutationPlan(
     col: '_meta',
     id: 'sync_state',
     data: {
-      dataRevision: Date.now(),
+      dataRevision: nextRevision ?? Date.now(),
       updatedAt: nowIsoVN(),
       updatedBy: actorEmail,
       schemaVersion: 1,
@@ -344,7 +347,80 @@ async function commitMutationPlan(
     merge: true,
   });
 
-  await commitOpsInChunks(ops);
+  return ops;
+}
+
+async function commitMutationPlan(
+  plan: BatchMutationPlan<unknown>,
+  actorEmail: string
+): Promise<void> {
+  await commitOpsInChunks(collectPlanOps(plan, actorEmail));
+}
+
+async function readCurrentDataRevision(): Promise<number> {
+  const db = getFirebaseDb();
+  const snap = await getDoc(doc(db, '_meta', 'sync_state'));
+  return snap.exists() ? Number(snap.data()?.dataRevision || 0) : 0;
+}
+
+async function commitMutationPlanWithRevisionGuard(
+  plan: BatchMutationPlan<unknown>,
+  actorEmail: string,
+  expectedRevision: number
+): Promise<void> {
+  const db = getFirebaseDb();
+  const baseOps = collectPlanOps(plan, actorEmail);
+  const domainOps = baseOps.slice(0, -1);
+
+  if (baseOps.length <= BATCH_CHUNK_SIZE) {
+    await runTransaction(db, async (tx) => {
+      const metaRef = doc(db, '_meta', 'sync_state');
+      const metaSnap = await tx.get(metaRef);
+      const liveRevision = metaSnap.exists() ? Number(metaSnap.data()?.dataRevision || 0) : 0;
+      assertOptimisticRevision(expectedRevision, liveRevision);
+
+      for (const op of domainOps) {
+        const ref = doc(db, op.col, op.id);
+        if (op.type === 'delete') {
+          tx.delete(ref);
+        } else {
+          const cleanData = stripUndefined(op.data || {});
+          if (op.merge) tx.set(ref, cleanData, { merge: true });
+          else tx.set(ref, cleanData);
+        }
+      }
+
+      tx.set(
+        metaRef,
+        {
+          dataRevision: Math.max(Date.now(), liveRevision + 1),
+          updatedAt: nowIsoVN(),
+          updatedBy: actorEmail,
+          schemaVersion: 1,
+        },
+        { merge: true }
+      );
+    });
+    return;
+  }
+
+  await runTransaction(db, async (tx) => {
+    const metaRef = doc(db, '_meta', 'sync_state');
+    const metaSnap = await tx.get(metaRef);
+    const liveRevision = metaSnap.exists() ? Number(metaSnap.data()?.dataRevision || 0) : 0;
+    assertOptimisticRevision(expectedRevision, liveRevision);
+    tx.set(
+      metaRef,
+      {
+        dataRevision: Math.max(Date.now(), liveRevision + 1),
+        updatedAt: nowIsoVN(),
+        updatedBy: actorEmail,
+        schemaVersion: 1,
+      },
+      { merge: true }
+    );
+  });
+  await commitOpsInChunks(domainOps);
 }
 
 async function verifyActorEditorRole(idToken: string): Promise<{
@@ -1138,11 +1214,14 @@ export const firebaseProvider: DataProvider = {
     return trackWrite('confirmPayment', async () => {
       try {
         const actor = await assertEditorActor(idToken);
-        const dataset = await fetchScopedDataset({
-          activeMonth: getTodayDateStr().slice(0, 7),
-        });
+        const [dataset, expectedRevision] = await Promise.all([
+          fetchScopedDataset({
+            activeMonth: getTodayDateStr().slice(0, 7),
+          }),
+          readCurrentDataRevision(),
+        ]);
         const plan = planConfirmPayment(dataset, payload, actor.email);
-        await commitMutationPlan(plan, actor.email);
+        await commitMutationPlanWithRevisionGuard(plan, actor.email, expectedRevision);
         return plan.result;
       } catch (err) {
         mapFirebaseError(err);
@@ -1158,12 +1237,14 @@ export const firebaseProvider: DataProvider = {
       try {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
-        const [dataset, targetSetSnap, bySettlementAttSnap, allDrinkingSetSnap] = await Promise.all([
-          fetchScopedDataset({ activeMonth: getTodayDateStr().slice(0, 7) }),
-          getDoc(doc(db, 'settlements', settlementId)),
-          getDocs(query(collection(db, 'attendance'), where('settlement_id', '==', settlementId))),
-          getDocs(query(collection(db, 'settlements'), where('category', '==', 'DRINKING'))),
-        ]);
+        const [dataset, targetSetSnap, bySettlementAttSnap, allDrinkingSetSnap, expectedRevision] =
+          await Promise.all([
+            fetchScopedDataset({ activeMonth: getTodayDateStr().slice(0, 7) }),
+            getDoc(doc(db, 'settlements', settlementId)),
+            getDocs(query(collection(db, 'attendance'), where('settlement_id', '==', settlementId))),
+            getDocs(query(collection(db, 'settlements'), where('category', '==', 'DRINKING'))),
+            readCurrentDataRevision(),
+          ]);
 
         const targetSet = targetSetSnap.exists() ? (targetSetSnap.data() as Settlement) : null;
         const drinkingSets = snapToDocs<Settlement>(allDrinkingSetSnap);
@@ -1242,7 +1323,7 @@ export const firebaseProvider: DataProvider = {
         }
 
         const plan = planUndoSettlement(dataset, settlementId);
-        await commitMutationPlan(plan, actor.email);
+        await commitMutationPlanWithRevisionGuard(plan, actor.email, expectedRevision);
         return plan.result;
       } catch (err) {
         mapFirebaseError(err);
@@ -1289,9 +1370,12 @@ export const firebaseProvider: DataProvider = {
     return trackWrite('issueMonthlyBill', async () => {
       try {
         const actor = await assertEditorActor(idToken);
-        const dataset = await fetchScopedDataset({ activeMonth: payload.month });
+        const [dataset, expectedRevision] = await Promise.all([
+          fetchScopedDataset({ activeMonth: payload.month }),
+          readCurrentDataRevision(),
+        ]);
         const plan = planIssueMonthlyBill(dataset, payload, actor.email);
-        await commitMutationPlan(plan, actor.email);
+        await commitMutationPlanWithRevisionGuard(plan, actor.email, expectedRevision);
         return plan.result;
       } catch (err) {
         mapFirebaseError(err);
@@ -1324,7 +1408,10 @@ export const firebaseProvider: DataProvider = {
       try {
         const actor = await assertEditorActor(idToken);
         const db = getFirebaseDb();
-        const targetDueSnap = await getDoc(doc(db, 'monthly_dues', payload.dueId));
+        const [targetDueSnap, expectedRevision] = await Promise.all([
+          getDoc(doc(db, 'monthly_dues', payload.dueId)),
+          readCurrentDataRevision(),
+        ]);
         if (!targetDueSnap.exists()) {
           throw new ApiClientError('NOT_FOUND', `Không tìm thấy khoản thu ${payload.dueId}`, 404);
         }
@@ -1332,7 +1419,7 @@ export const firebaseProvider: DataProvider = {
         const dataset = await fetchScopedDataset({ activeMonth: targetDue.month });
         dataset.monthly_dues = dedupeById([...dataset.monthly_dues, targetDue], (d) => d.due_id);
         const plan = planMarkDuePaid(dataset, payload, actor.email);
-        await commitMutationPlan(plan, actor.email);
+        await commitMutationPlanWithRevisionGuard(plan, actor.email, expectedRevision);
         return plan.result;
       } catch (err) {
         mapFirebaseError(err);
@@ -1344,9 +1431,12 @@ export const firebaseProvider: DataProvider = {
     return trackWrite('closeMonth', async () => {
       try {
         const actor = await assertEditorActor(idToken);
-        const dataset = await fetchScopedDataset({ activeMonth: payload.month });
+        const [dataset, expectedRevision] = await Promise.all([
+          fetchScopedDataset({ activeMonth: payload.month }),
+          readCurrentDataRevision(),
+        ]);
         const plan = planCloseMonth(dataset, payload, actor.email);
-        await commitMutationPlan(plan, actor.email);
+        await commitMutationPlanWithRevisionGuard(plan, actor.email, expectedRevision);
         return plan.result;
       } catch (err) {
         mapFirebaseError(err);

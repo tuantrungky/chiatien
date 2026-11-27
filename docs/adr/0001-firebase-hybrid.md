@@ -46,6 +46,6 @@ Từ đợt Audit v2.4 (2026-11-27), hệ thống sử dụng **10 bảng** nghi
 
 ## 3. Rủi Ro & Giới Hạn Kỹ Thuật Cần Lưu Ý
 
-1. **Xung đột ghi đồng thời trên Firestore:** `FirebaseProvider` hiện đọc `fetchScopedDataset()` rồi ghi bằng `writeBatch` (chia chunk 450 ops) mà chưa dùng `runTransaction` xuyên nhiều collection. Với quy mô CLB 2–3 Editor rủi ro thấp, nhưng nếu cần tăng tính chặt chẽ nên tránh bấm đúp hoặc bổ sung khóa lạc quan theo `dataRevision` (xem [ROADMAP.md](../ROADMAP.md)).
+1. **Xung đột ghi đồng thời trên Firestore:** Các thao tác tài chính nhạy cảm (`confirmPayment`, `undoSettlement`, `issueMonthlyBill`, `markDuePaid`, `closeMonth`) đã dùng `runTransaction` kèm kiểm tra lạc quan `dataRevision` trên `_meta/sync_state` (trả `CONFLICT_LOCK` 409 nếu có người khác vừa ghi). Các thao tác còn lại dùng `writeBatch` (chia chunk 450 ops).
 2. **Giới hạn 6 phút của GAS khi Push toàn bộ bảng:** `importRawTablesRecord` ghi đè tuần tự 10 tab Google Sheets trong 1 request POST. Nếu dữ liệu tích lũy quá lớn qua nhiều năm, cần tách thành API ghi theo từng bảng.
 3. **Tính toàn vẹn schema:** Firestore Security Rules kiểm tra phân quyền vai trò (`isEditor`, `isAdmin`, `isSignedIn` với `email_verified == true`), không kiểm tra chéo công thức số tiền phía server — tin tưởng code client của Editor/Admin đã xác thực.

@@ -11,16 +11,20 @@ import { VietQRModal, type VietQRModalData } from './components/VietQRModal';
 import { useAuth } from './contexts/AuthContext';
 import { useToast } from './contexts/ToastContext';
 import { useClubData } from './hooks/useClubData';
-import { DebtsAndSessionsPage } from './pages/DebtsAndSessionsPage';
-import { MonthlyBadmintonPage } from './pages/MonthlyBadmintonPage';
 import type { ScheduleDay, Session, SessionType } from './types';
 
-// Code-splitting cho các trang nặng (Recharts, Calendar, CreateSession, Settings)
+// Code-splitting cho toàn bộ các trang để giữ chunk chính gọn nhẹ
 const DashboardPage = lazy(() =>
   import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage }))
 );
 const CalendarPage = lazy(() =>
   import('./pages/CalendarPage').then((m) => ({ default: m.CalendarPage }))
+);
+const DebtsAndSessionsPage = lazy(() =>
+  import('./pages/DebtsAndSessionsPage').then((m) => ({ default: m.DebtsAndSessionsPage }))
+);
+const MonthlyBadmintonPage = lazy(() =>
+  import('./pages/MonthlyBadmintonPage').then((m) => ({ default: m.MonthlyBadmintonPage }))
 );
 const CreateSessionPage = lazy(() =>
   import('./pages/CreateSessionPage').then((m) => ({ default: m.CreateSessionPage }))
