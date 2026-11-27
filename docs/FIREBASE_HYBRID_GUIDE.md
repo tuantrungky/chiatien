@@ -63,6 +63,9 @@ Tài liệu này hướng dẫn từng bước thiết lập **Cloud Firestore +
 
 ---
 
+> **Lưu ý `VITE_USE_MOCK`:** nếu `VITE_USE_MOCK=true`, app luôn chạy Mock và bỏ qua `VITE_DB_PROVIDER`. Trên Vercel phải để `false`.
+> **Quyền riêng tư:** Security Rules hiện cho Viewer đọc công khai `members` (gồm email/SĐT/STK, cần cho VietQR). Xem mục câu hỏi mở trong `AUDIT_CHECKLIST.md`.
+
 ## Vận Hành Hằng Ngày & Sao Lưu Định Kỳ
 
 - **Hằng ngày:** Mọi thao tác đọc/ghi chạy trực tiếp trên **Cloud Firestore** (tốc độ ~100ms, cập nhật real-time giữa các máy qua `_meta/sync_state`, phiên đăng nhập Google tự gia hạn không hết hạn mỗi giờ). Ảnh hóa đơn và AI OCR vẫn dùng GAS + Google Drive miễn phí.

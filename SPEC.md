@@ -1,4 +1,4 @@
-# SPEC.md — Hệ Thống Quản Lý Lịch Cầu Lông & Chia Tiền Ăn Nhậu
+﻿# SPEC.md — Hệ Thống Quản Lý Lịch Cầu Lông & Chia Tiền Ăn Nhậu
 
 > **Vai trò tài liệu:** Nguồn chân lý duy nhất (Single Source of Truth) cho kiến trúc, phân quyền, nghiệp vụ tính tiền tách biệt Cầu lông / Ăn nhậu, cơ sở dữ liệu Google Sheets (11 tabs), hợp đồng API (REST over Google Apps Script) và giao diện Mobile-first của dự án.
 
@@ -18,7 +18,7 @@ Dự án xây dựng một Web Application tối ưu cho thiết bị di động
   - Tổng chi phí bàn nhậu bằng tổng các khoản `BILL` và `ITEM` (hoặc tổng hóa đơn nhập tay/AI); chia đều cho những người tham gia; tính `net_amount = per_person - contributed_amount` cho từng người (`> 0` là phải trả thêm, `< 0` là được nhận lại).
   - Thuật toán cấn trừ nợ vòng tròn (**Debt Simplification**) **chỉ chạy nội bộ trong nhóm Ăn nhậu**, không bao giờ trộn lẫn với công nợ Cầu lông.
 - **Tích hợp AI (Gemini):** Bóc tách hóa đơn từ ảnh chụp (lưu ảnh trên Google Drive theo thư mục tháng `YYYY-MM`). Điểm danh sử dụng tick tay trực tiếp + tìm kiếm + thêm nhanh vãng lai (đã lược bỏ giọng nói).
-- **Hiệu năng & Offline-tolerant:** API gộp `getAll` + request-scoped `_SHEET_CACHE_` (đọc mỗi tab Google Sheet đúng 1 lần/request) + cắt gọn `sessions` trả về (6 tháng gần nhất + buổi còn `Attendance` chưa đóng để luôn dưới 95 KB `CacheService`) + cache `localStorage` Stale-While-Revalidate (`cln_swr_v5`) + lưu phiên đăng nhập (`cln_editor_session_v2`, `cln_my_member_id_v1`) với làm mới token thầm lặng (Google One Tap).
+- **Hiệu năng & Offline-tolerant:** API gộp `getAll` + request-scoped `_SHEET_CACHE_` (đọc mỗi tab Google Sheet đúng 1 lần/request) + cắt gọn `sessions` trả về (6 tháng gần nhất + buổi còn `Attendance` chưa đóng để luôn dưới 95 KB `CacheService`) + cache `localStorage` Stale-While-Revalidate (`cln_swr_v6` (key kèm provider/tháng/kỳ)) + lưu phiên đăng nhập (`cln_editor_session_v2`, `cln_my_member_id_v1`) với làm mới token thầm lặng (Google One Tap).
 - **Định danh thành viên, Nhắc nợ & Cảnh báo quá hạn:** Thành viên thường cũng có thể đăng nhập Google (`verifyUser`), tự chọn tên mình để lưu `Members.email` (`linkMemberEmail`), lọc `"Chỉ xem của tôi"` hoặc xem `"Cả CLB (nhắc nhau)"` kèm cảnh báo quá hạn theo mốc 10 / 15 / 20 / 30+ ngày (`OverdueBadge`) và nút **Copy tin nhắn Zalo**.
 
 ### 1.2. Nguyên tắc thiết kế cốt lõi
@@ -54,6 +54,9 @@ flowchart LR
 caulong-nhau/
 ├── SPEC.md                          # Tài liệu đặc tả nguồn chân lý duy nhất
 ├── README.md                        # Hướng dẫn triển khai từ A-Z
+├── AUDIT_CHECKLIST.md               # Theo dõi cải tiến / nợ kỹ thuật / roadmap
+├── docs/                            # CALCULATION_AUDIT_CHECKLIST, FIREBASE_HYBRID_GUIDE, FIREBASE_HYBRID_PLAN
+├── firebase/                        # firestore.rules, firestore.indexes.json
 ├── frontend/                        # Web App React + Vite + TypeScript + Tailwind (Deploy Vercel)
 │   ├── public/                      # Static assets, icons, manifest.json
 │   └── src/
@@ -61,9 +64,10 @@ caulong-nhau/
 │       ├── contexts/                # AuthContext (localStorage + One Tap), ToastContext
 │       ├── hooks/                   # useClubData (getAll + SWR localStorage)
 │       ├── pages/                   # DashboardPage, CalendarPage, DebtsAndSessionsPage, MonthlyBadmintonPage, CreateSessionPage, SettingsPage
-│       ├── services/                # api.ts, mockData.ts, imageCompression.ts
+│       ├── services/                # api.ts (facade), providerRegistry.ts, domainEngine.ts (logic dùng chung),
+│       │                            #   providers/ (firebase|gas|mock), firebase/config.ts, sync/manualSync.ts, mockData.ts
 │       ├── types/                   # index.ts (khớp 100% Schema 11 tabs & API Contract)
-│       └── utils/                   # badmintonCost.ts, monthlyBill.ts, drinkingSplit.ts, schedule.ts, debtSimplifier.ts, vietqr.ts, dateFilters.ts
+│       └── utils/                   # badmintonCost.ts, monthlyBill.ts, drinkingSplit.ts, schedule.ts, debtSimplifier.ts, vietqr.ts, dateFilters.ts, imageCompress.ts, overdue.ts, zaloShare.ts, writeTracker.ts
 └── gas-backend/                     # Google Apps Script REST API
     ├── Code.gs                      # Entrypoint doGet / doPost + CacheService wrapper
     ├── AuthService.gs               # Verify Google ID Token + kiểm tra tab Editors
@@ -80,7 +84,11 @@ caulong-nhau/
 | :--- | :--- | :--- |
 | `VITE_GAS_API_URL` | Có | URL Web App deployment của Google Apps Script (`https://script.google.com/macros/s/.../exec`) |
 | `VITE_GOOGLE_CLIENT_ID` | Có | OAuth 2.0 Client ID (Web Application) dùng cho Google Identity Services |
-| `VITE_USE_MOCK` | Không | `true` để chạy local bằng mock data, `false` khi chạy thật |
+| `VITE_USE_MOCK` | Không | `true` = luôn chạy mock (bỏ qua `VITE_DB_PROVIDER`); production phải `false` |
+| `VITE_DB_PROVIDER` | Không | `firebase` \| `gas` \| `mock`. Trống: tự chọn firebase → gas → mock theo cấu hình có sẵn. Admin có thể override cục bộ (`cln_db_provider_override_v1`) |
+| `VITE_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` | Khi dùng Firebase | Cấu hình Firebase Web App |
+
+> **Kiến trúc Hybrid:** Cloud Firestore (11 collection + `_meta/sync_state`) là DB chính khi `firebase`; Google Sheets là nguồn gốc/backup/fallback, đồng bộ thủ công 2 chiều bởi `ADMIN` (`exportRawTables` / `importRawTables`). Logic nghiệp vụ dùng chung ở `services/domainEngine.ts`, song song với `SheetService.gs` — hai nơi phải luôn khớp. Ảnh hóa đơn & Gemini vẫn đi qua GAS.
 
 #### GAS Backend (`PropertiesService.getScriptProperties()`)
 | Property Key | Bắt buộc | Mô tả |
@@ -90,6 +98,7 @@ caulong-nhau/
 | `GEMINI_API_KEY` | Có | API Key của Google Gemini (chỉ lưu ở Script Properties, không lộ ra Frontend) |
 | `GEMINI_MODEL` | Không | Tên model Gemini mặc định (VD: `gemini-2.5-flash`) |
 | `GOOGLE_CLIENT_ID` | Có | Trùng với `VITE_GOOGLE_CLIENT_ID`, dùng xác minh trường `aud` của ID Token |
+| `FIREBASE_WEB_API_KEY` | Khi dùng Firebase | Để GAS xác thực Firebase ID Token (`identitytoolkit accounts:lookup`); GAS nhận song song cả Firebase token và GIS token |
 
 ---
 
@@ -106,7 +115,8 @@ caulong-nhau/
 > - `EDITOR`: Toàn quyền nghiệp vụ (buổi chơi, lịch, hóa đơn tháng, công nợ, thành viên, cài đặt).
 > - `ADMIN`: Toàn quyền `EDITOR` + quản lý danh sách `Editors` (`manageEditors`).
 
-### 3.2. Luồng xác thực Google ID Token & Lưu phiên `localStorage`
+### 3.2. Luồng xác thực (Firebase Auth / Google ID Token) & Lưu phiên `localStorage`
+0. Khi Firebase được cấu hình: đăng nhập bằng Firebase Auth (Google Sign-In), token tự gia hạn; Firestore Security Rules (`firebase/firestore.rules`) kiểm tra quyền qua `editors/{email}`. Token Firebase cũng được gửi sang GAS (`parseBillAI`, sync). Khi chỉ dùng GAS: dùng Google Identity Services như mô tả dưới.
 1. Frontend lưu phiên tại `localStorage` (`cln_editor_session_v2`, `cln_editor_profile_v2`, `cln_my_member_id_v1`) để người dùng đóng/mở lại trình duyệt trên điện thoại vẫn giữ trạng thái đăng nhập nhanh.
 2. Khi token sắp hết hạn hoặc API trả `UNAUTHORIZED`, Frontend tự thử làm mới thầm lặng qua Google Identity Services (`auto_select: true` / One Tap). Nếu không thể làm mới thầm lặng, mở `ReauthModal` để đăng nhập lại 1 chạm mà **không xóa dữ liệu form đang nhập**.
 3. Backend `AuthService.gs` kiểm tra `idToken` qua `tokeninfo` (`verifyGoogleJwt_` / `verifyUserToken`), xác minh `aud`, `email_verified`, `exp`, đối chiếu `email` trong tab `Editors` (`is_active = TRUE`) hoặc tìm `linkedMemberId` qua `Members.email`; mọi hành động ghi admin/editor đều kiểm tra `if (!auth.isEditor)` (`403 FORBIDDEN`) và bọc trong `LockService.getScriptLock().waitLock(10000)`.
@@ -207,7 +217,7 @@ caulong-nhau/
 ## 5. Tính năng AI & Ảnh hóa đơn (Gemini + Google Drive)
 
 - Toàn bộ lệnh gọi Gemini chạy ở GAS (`GeminiService.gs`) để bảo vệ `GEMINI_API_KEY`.
-- Trước khi upload từ Frontend (`imageCompression.ts`), ảnh được nén ở client (Canvas resize + JPEG) để payload nhẹ.
+- Trước khi upload từ Frontend (`utils/imageCompress.ts`), ảnh được nén ở client (Canvas resize + JPEG) để payload nhẹ.
 - Backend (`DriveService.gs` + `GeminiService.gs`) lưu ảnh vào subfolder `YYYY-MM` trong `ROOT_DRIVE_FOLDER_ID`, bật quyền xem `ANYONE_WITH_LINK`, và trả về `receipt_drive_id`, `receipt_url`, `total_amount`, `items_summary`, `suggested_title`.
 - **Lưu ý:** Tính năng điểm danh bằng giọng nói đã được gỡ bỏ hoàn toàn khỏi cả Frontend và Backend để tối ưu sự gọn nhẹ, tập trung vào tick tay + thêm nhanh vãng lai.
 
@@ -282,6 +292,11 @@ Cấu hình các khóa mặc định:
   - Hóa đơn Cầu lông tháng: `issueMonthlyBill`, `saveMonthlyContributions`, `markDuePaid`, `closeMonth`.
   - Thành viên & Cài đặt: `upsertMember`, `updateSettings`.
   - AI Hóa đơn: `parseBillAI` (alias `parseReceipt`).
+  - Đồng bộ Sheet ↔ Firebase (`ADMIN`): `exportRawTables`, `importRawTables`.
+
+> **Quy tắc làm tròn (đã triển khai):** hóa đơn tháng và buổi cầu phát sinh dùng `ceil` theo `rounding_unit`; chia Ăn nhậu dùng `round`, phần dư bù vào `payer_id`/người góp nhiều nhất để `Σ net_amount = 0`. *(Chờ xác nhận chủ đích — xem AUDIT_CHECKLIST.)*
+> **Tái dùng cột:** `Settlements.source_ledger_ids` dạng `REC:SET_1,SET_2` lưu các đợt chốt `SIMPLIFIED_TRANSFER` đã đối soát (không thêm trường mới).
+> **Quy tắc đã chốt** (xem `docs/CALCULATION_AUDIT_CHECKLIST.md` §1): vãng lai tính theo `paid_at` cho quỹ tháng; sửa buổi đã có `settlement_id` chỉ được đổi tiêu đề/ghi chú/ảnh; tạo/sửa buổi vào tháng `CLOSED` phải xác nhận cảnh báo.
 
 ---
 
@@ -302,4 +317,4 @@ Cấu hình các khóa mặc định:
 | `/debts` (**Công nợ**) | Viewer, Member, Editor | Bộ lọc `"Tôi là ai?"` + `"Copy tin nhắn nhắc nợ Zalo"`; Tab `1. Tiền Cầu lông` (Tháng cầu `MAIN`, Phát sinh & Vãng lai -> VietQR) & `2. Tiền Ăn nhậu` (Chuyển khoản tối ưu nội bộ + breakdown từng buổi + VietQR); Lịch sử đã thu kèm nút **Hoàn tác** (`undoSettlement`); Tab `Lịch sử buổi`. |
 | `/monthly` (**Tháng cầu**) | Viewer, Member, Editor | Công thức minh bạch, nút **Copy báo thu Zalo**, góp ống cầu trong tháng, danh sách `MAIN` kèm cảnh báo quá hạn & VietQR; tự động gợi ý `suggestedPrevOvertime` từ các dòng Sân thêm giờ tháng trước; Tab thống kê `Vãng lai theo tháng`. |
 | `/create` (**Ghi buổi**) | Editor | Tạo/Sửa buổi `BADMINTON` cố định (0đ mặc định, thu Vãng lai `50.000đ` + tùy chọn **Sân thêm giờ**), `BADMINTON` phát sinh (`Sân + Cầu + Khác`, ghi đè tay) hoặc `DRINKING` (`RESTAURANT`/`HOME` + `Session_Items` góp món); Quét ảnh bill AI dùng chung; Tick tay + tìm kiếm + thêm nhanh vãng lai. |
-| `/settings` (**Cài đặt**) | Editor | Cấu hình `Settings` (giá sân/giờ, giá quả cầu, số sân/giờ mặc định, phí vãng lai, Thủ quỹ), quản lý `Members` và `Editors` (`ADMIN`). |
+| `/settings` (**Cài đặt**) | Editor | Cấu hình `Settings`, quản lý `Members` và `Editors` (`ADMIN`); tab **Database & Đồng bộ** (`ADMIN`): chọn nguồn dữ liệu cục bộ, so sánh số bản ghi, Pull Sheet→Firebase, Push Firebase→Sheet. |

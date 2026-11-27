@@ -36,13 +36,15 @@ Tài liệu ghi nhận toàn bộ kết quả **Audit dự án (2026-11-26)** g�
 - [ ] **Tách Mock Engine khỏi `api.ts`:** Tách phần giả lập mock (~600 dòng) sang `mockApi.ts` và dynamic import khi `VITE_USE_MOCK=true` để giảm kích thước bundle production.
 - [ ] **Tách nhỏ các Modal trong Pages:** Tách các modal ở `MonthlyBadmintonPage.tsx`, `CreateSessionPage.tsx`, `DebtsAndSessionsPage.tsx`, `SettingsPage.tsx` thành component con riêng.
 - [ ] **Gỡ bỏ hoàn toàn legacy `Fund_Ledger`:** Sau khi xác nhận CLB không còn cần tra cứu dữ liệu lịch sử cũ trước v2, gỡ `Fund_Ledger`, `source_ledger_ids` và các type legacy khỏi `SPEC.md`, `SheetService.gs`, `types/index.ts`.
-- [ ] **Dọn file thừa:** Xóa các file `.gitkeep` trong thư mục đã có source và `frontend/public/icon.svg` cũ.
+- [x] **Dọn file thừa:** Đã xóa các file `.gitkeep` (2026-11-27). **Không xóa `frontend/public/icon.svg`** vì `manifest.json` vẫn tham chiếu; chỉ xóa sau khi bỏ khỏi manifest.
+- [ ] **Quyết định làm rõ (chưa chốt):** làm tròn `ceil` (tiền cầu/phát sinh) vs `round` (ăn nhậu); `members` (email/SĐT/STK) đang công khai cho Viewer; gỡ hay giữ `fund_ledger`.
+- [x] **Chuyển DB sang Firebase Hybrid** (Firestore chính, Sheets backup/fallback) — xem `docs/FIREBASE_HYBRID_GUIDE.md`.
 
 ---
 
 ## Phần C — Lộ trình Tương lai: Đa Nhóm, Đa Môn & Đa Người Dùng (v3.0+)
 
-- [ ] **Chuyển tầng lưu trữ sang Supabase (PostgreSQL + Auth + Storage + RLS):**
+- [ ] **Phương án dài hạn (chỉ khi Firebase Spark không đủ): Supabase (PostgreSQL + Auth + Storage + RLS).** *Hiện tại đã chốt Firebase Firestore làm DB chính (v2.4).*
   - Giải quyết triệt để giới hạn của GAS/Sheets (cold start, khóa `LockService`, giới hạn cache 95KB, phiên Google 1h trên iOS Safari, thiếu phân tách dữ liệu đa nhóm).
   - Bổ sung Realtime subscription: Thủ quỹ bấm *"Đã thu"* là màn hình thành viên tự cập nhật ngay.
 - [ ] **Kiến trúc Multi-Tenant & Multi-User Hub (`/groups`):**

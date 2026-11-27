@@ -1,4 +1,4 @@
-# MASTER PLAN: Chuyển Đổi Database Sang Firebase (Kiến Trúc Hybrid Linh Hoạt)
+﻿# MASTER PLAN: Chuyển Đổi Database Sang Firebase (Kiến Trúc Hybrid Linh Hoạt)
 
 > Tài liệu này là bản thiết kế kỹ thuật chuẩn (Blueprint) cho việc chuyển đổi database của ứng dụng **CLB Cầu Lông & Nhậu** từ Google Sheets + Google Apps Script (GAS) sang **Cloud Firestore + Firebase Auth**, kết hợp mô hình **Hybrid** linh hoạt chuyển nguồn và đồng bộ 2 chiều với Google Sheets.
 
@@ -93,63 +93,7 @@ Giữ nguyên tên field `snake_case` của [types/index.ts](../frontend/src/typ
 
 ### 3.3. Firestore Security Rules (`firebase/firestore.rules`)
 
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    function isSignedIn() {
-      return request.auth != null && request.auth.token.email != null;
-    }
-    function userEmail() {
-      return request.auth.token.email.lower();
-    }
-    function editorPath() {
-      return /databases/$(database)/documents/editors/$(userEmail());
-    }
-    function isEditor() {
-      return isSignedIn()
-        && exists(editorPath())
-        && get(editorPath()).data.is_active == true
-        && (get(editorPath()).data.role == 'ADMIN' || get(editorPath()).data.role == 'EDITOR');
-    }
-    function isAdmin() {
-      return isEditor() && get(editorPath()).data.role == 'ADMIN';
-    }
-
-    match /sessions/{id} { allow read: if true; allow write: if isEditor(); }
-    match /attendance/{id} { allow read: if true; allow write: if isEditor(); }
-    match /session_items/{id} { allow read: if true; allow write: if isEditor(); }
-    match /schedule/{id} { allow read: if true; allow write: if isEditor(); }
-    match /monthly_bills/{id} { allow read: if true; allow write: if isEditor(); }
-    match /monthly_dues/{id} { allow read: if true; allow write: if isEditor(); }
-    match /settlements/{id} { allow read: if true; allow write: if isEditor(); }
-    match /settings/{id} { allow read: if true; allow write: if isEditor(); }
-    match /fund_ledger/{id} { allow read: if true; allow write: if isAdmin(); }
-    match /_meta/{id} { allow read: if true; allow write: if isEditor(); }
-
-    // Viewer đọc công khai; Editor sửa toàn bộ; Member thường chỉ tự link/unlink email của chính mình
-    match /members/{memberId} {
-      allow read: if true;
-      allow create, delete: if isEditor();
-      allow update: if isEditor() || (
-        isSignedIn()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'updated_at'])
-        && (
-          ((resource.data.email == '' || resource.data.email == null) && request.resource.data.email == userEmail())
-          || (resource.data.email == userEmail() && request.resource.data.email == '')
-        )
-      );
-    }
-
-    // Bảo vệ danh sách editors: user thường chỉ get được doc của chính email mình
-    match /editors/{email} {
-      allow get: if isSignedIn() && (userEmail() == email || isEditor());
-      allow list: if isEditor();
-      allow write: if isAdmin();
-    }
-  }
-}
-```
+Nội dung rules chuẩn nằm tại [firebase/firestore.rules](../firebase/firestore.rules) (nguồn duy nhất, không sao chép ở đây để tránh lệch). Tóm tắt: Viewer đọc công khai; `isEditor()`/`isAdmin()` tra cứu `editors/{email}`; Member chỉ được tự link/unlink `email` của chính mình trên `members`; `editors` chỉ `ADMIN` ghi.
 
 ---
 

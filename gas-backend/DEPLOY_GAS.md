@@ -1,4 +1,4 @@
-# Hướng Dẫn Deploy Backend Google Apps Script (GAS)
+﻿# Hướng Dẫn Deploy Backend Google Apps Script (GAS)
 
 Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Google Drive, Google OAuth Client ID, Gemini API Key và deploy mã nguồn trong `/gas-backend` lên Google Apps Script làm REST API cho ứng dụng **Quản lý Lịch Cầu Lông & Chia Tiền Ăn Nhậu**.
 
@@ -59,6 +59,7 @@ Tài liệu này hướng dẫn từng bước thiết lập Google Sheet, Googl
 | `GEMINI_API_KEY` | `AIzaSy...` | API key lấy ở Google AI Studio |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Model Gemini hỗ trợ đọc ảnh hóa đơn (Vision) |
 | `ROOT_DRIVE_FOLDER_ID` | `1AbCdEf...` | ID thư mục `CLB_Hoa_Don` trên Google Drive |
+| `FIREBASE_WEB_API_KEY` | `AIzaSy...` | *(Chỉ khi dùng Firebase)* Web API Key của Firebase project, để GAS xác thực Firebase ID Token (cho `parseBillAI`, `exportRawTables`, `importRawTables`). Xem [FIREBASE_HYBRID_GUIDE](../docs/FIREBASE_HYBRID_GUIDE.md) |
 
 3. Bấm **Save script properties**.
 

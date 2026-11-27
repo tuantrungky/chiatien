@@ -64,6 +64,6 @@ Mục tiêu: Sửa toàn bộ lỗi logic kế toán, đồng bộ chéo 1–1 g
 
 ### Bước 6: Kiểm thử & Đối chiếu chéo
 - [x] Bổ sung unit test trong `monthlyBill.test.ts`, `debtSimplifier.test.ts`, `drinkingSplit.test.ts`, `domainEngine.test.ts`
-- [x] Chạy `npm --prefix frontend test` (13/13 file, 57/57 test pass) và `npm --prefix frontend run build` (`tsc -b && vite build` exit 0)
+- [x] Chạy `npm --prefix frontend test` (13/13 file, 57/57 test pass; cập nhật 2026-11-27: 58/58) và `npm --prefix frontend run build` (`tsc -b && vite build` exit 0)
 - [x] Kiểm tra chéo 1–1 lần cuối giữa `domainEngine.ts` và `SheetService.gs` và cập nhật toàn bộ checkbox `[x]`
 - [x] Tạo walkthrough tổng kết
