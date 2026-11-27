@@ -1834,6 +1834,9 @@ export function MonthlyBadmintonPage({
       {/* MODAL 3: CHỐT THÁNG */}
       {closeOpen && isEditor && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Chốt ${formatMonthLabel(activeMonth)}`}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setCloseOpen(false)}
         >

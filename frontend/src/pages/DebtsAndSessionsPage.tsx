@@ -74,6 +74,20 @@ interface DebtsAndSessionsPageProps {
   onCreateNewSession: (type: 'BADMINTON' | 'DRINKING') => void;
 }
 
+type SessionTypeFilter = 'ALL' | 'BADMINTON' | 'BADMINTON_FIXED' | 'BADMINTON_ADHOC' | 'DRINKING';
+
+function parseSessionFilterParam(raw: string | null): SessionTypeFilter {
+  if (
+    raw === 'BADMINTON' ||
+    raw === 'BADMINTON_FIXED' ||
+    raw === 'BADMINTON_ADHOC' ||
+    raw === 'DRINKING'
+  ) {
+    return raw;
+  }
+  return 'ALL';
+}
+
 export function DebtsAndSessionsPage({
   bootstrap,
   debts,
@@ -96,12 +110,9 @@ export function DebtsAndSessionsPage({
   const [showAllBadminton, setShowAllBadminton] = useState<boolean>(false);
   const [showAllDrinking, setShowAllDrinking] = useState<boolean>(false);
   const [expandedTransferKey, setExpandedTransferKey] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<
-    'ALL' | 'BADMINTON' | 'BADMINTON_FIXED' | 'BADMINTON_ADHOC' | 'DRINKING'
-  >(() => {
-    const typeParam = searchParams.get('type');
-    return typeParam === 'BADMINTON' || typeParam === 'DRINKING' ? typeParam : 'ALL';
-  });
+  const [sessionFilter, setSessionFilter] = useState<SessionTypeFilter>(() =>
+    parseSessionFilterParam(searchParams.get('type'))
+  );
   const [sessionSearch, setSessionSearch] = useState<string>('');
   const [sessionPayerId, setSessionPayerId] = useState<string>('');
   const [sessionDateFilter, setSessionDateFilter] = useState<string>('');
@@ -110,10 +121,8 @@ export function DebtsAndSessionsPage({
     const tabParam = searchParams.get('tab');
     const typeParam = searchParams.get('type');
     setSubTab(tabParam === 'sessions' ? 'SESSIONS' : 'DEBTS');
-    if (typeParam === 'BADMINTON' || typeParam === 'DRINKING' || typeParam === 'ALL') {
-      setSessionFilter(typeParam);
-    } else if (tabParam === 'sessions') {
-      setSessionFilter('ALL');
+    if (tabParam === 'sessions' || typeParam !== null) {
+      setSessionFilter(parseSessionFilterParam(typeParam));
     }
   }, [searchParams]);
 
@@ -123,21 +132,17 @@ export function DebtsAndSessionsPage({
       setSearchParams({}, { replace: true });
     } else {
       const nextParams: Record<string, string> = { tab: 'sessions' };
-      if (sessionFilter === 'BADMINTON' || sessionFilter === 'BADMINTON_FIXED' || sessionFilter === 'BADMINTON_ADHOC') {
-        nextParams.type = 'BADMINTON';
-      } else if (sessionFilter === 'DRINKING') {
-        nextParams.type = 'DRINKING';
+      if (sessionFilter !== 'ALL') {
+        nextParams.type = sessionFilter;
       }
       setSearchParams(nextParams, { replace: true });
     }
   };
 
-  const handleSelectSessionFilter = (
-    nextFilter: 'ALL' | 'BADMINTON' | 'BADMINTON_FIXED' | 'BADMINTON_ADHOC' | 'DRINKING'
-  ) => {
+  const handleSelectSessionFilter = (nextFilter: SessionTypeFilter) => {
     setSessionFilter(nextFilter);
     const nextParams: Record<string, string> = { tab: 'sessions' };
-    if (nextFilter === 'BADMINTON' || nextFilter === 'DRINKING') {
+    if (nextFilter !== 'ALL') {
       nextParams.type = nextFilter;
     }
     setSearchParams(nextParams, { replace: true });

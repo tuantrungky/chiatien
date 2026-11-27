@@ -56,7 +56,7 @@ export function DebtFilterBar({
             type="search"
             value={filters.searchName}
             onChange={(e) => onChange({ ...filters, searchName: e.target.value })}
-            placeholder="Tìm tên người nợ (không dấu)..."
+            placeholder="Tìm tên người nợ..."
             className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
           />
           {filters.searchName && (
