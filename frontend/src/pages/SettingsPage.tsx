@@ -456,7 +456,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     if (!isAdmin || syncLoading || !capabilities.firebaseReady) return;
     if (
       !window.confirm(
-        'Xác nhận tách toàn bộ SĐT & Email từ collection members sang members_private trên Firestore?\n\nThao tác này an toàn (idempotent), giúp ẩn SĐT/Email khỏi Viewer công khai trước khi bạn publish firestore.rules mới.'
+        'Xác nhận tách toàn bộ SĐT & Email từ collection members sang members_private trên Firestore?\n\nThao tác này an toàn (idempotent). Lưu ý: cần Publish file firebase/firestore.rules mới nhất trên Firebase Console trước khi chạy.'
       )
     ) {
       return;
@@ -470,7 +470,7 @@ export function SettingsPage({ members, settings, onRefreshAll }: SettingsPagePr
     try {
       const res = await migrateMembersPrivateOnFirestore(editor.email);
       setSuccessMsg(
-        `Đã tách riêng tư xong (${res.migrated} bản ghi private, dọn ${res.cleaned} hồ sơ công khai). Bạn có thể publish firestore.rules mới ngay bây giờ.`
+        `Đã tách riêng tư xong (${res.migrated} bản ghi private, dọn ${res.cleaned} hồ sơ công khai). SĐT/Email đã được ẩn khỏi Viewer công khai.`
       );
       toast.success('Đã tách SĐT/Email sang vùng riêng tư!');
       await Promise.all([onRefreshAll(), loadMembersPrivate()]);

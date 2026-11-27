@@ -54,10 +54,11 @@ service cloud.firestore {
       );
       allow update: if isEditor() || (
         isSignedIn()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'updated_at'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['member_id', 'email', 'updated_at'])
+        && request.resource.data.member_id == memberId
         && (
-          ((resource.data.email == '' || resource.data.email == null) && request.resource.data.email == userEmail())
-          || (resource.data.email == userEmail() && request.resource.data.email == '')
+          ((!('email' in resource.data) || resource.data.email == '' || resource.data.email == null) && request.resource.data.email == userEmail())
+          || (resource.data.email == userEmail() && (request.resource.data.email == '' || request.resource.data.email == userEmail()))
         )
       );
       allow delete: if isEditor();

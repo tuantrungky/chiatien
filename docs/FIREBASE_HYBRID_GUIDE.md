@@ -53,7 +53,7 @@ Tài liệu này hướng dẫn từng bước thiết lập **Cloud Firestore +
    - Vào **Quản trị & Cài đặt** → tab **Database & Sync**.
    - Bấm nút **Pull: Google Sheet → Firebase**. Hệ thống sẽ kéo toàn bộ **10 bảng** sang Firestore (và tự tách `phone`/`email` sang `members_private`).
    - Bấm **So sánh dữ liệu** để xác nhận tất cả 10 bảng có chênh lệch = `0`.
-   - *(Nếu Firestore đã có dữ liệu chạy trước bản cập nhật bảo mật)* Bấm nút **Tách SĐT/Email sang vùng riêng tư** rồi publish lại [firestore.rules](../firebase/firestore.rules) để ẩn SĐT/Email khỏi Viewer công khai.
+   - *(Nếu Firestore đã có dữ liệu chạy trước bản cập nhật bảo mật)* Hãy đảm bảo đã publish [firestore.rules](../firebase/firestore.rules) mới **trước**, sau đó bấm nút **Tách SĐT/Email sang vùng riêng tư** để chuyển toàn bộ SĐT/Email sang `members_private` và ẩn khỏi Viewer công khai.
 3. **Đối chiếu chéo số liệu:**
    - Ngay trong tab **Database & Sync**, bấm chuyển nguồn cục bộ sang **Firebase** (chỉ ảnh hưởng trình duyệt của bạn).
    - Kiểm tra Tổng quan, Công nợ Cầu lông / Ăn nhậu, Lịch tháng, Tháng cầu — đối chiếu với lúc chọn **Google Sheets** đảm bảo khớp từng đồng.
@@ -66,7 +66,7 @@ Tài liệu này hướng dẫn từng bước thiết lập **Cloud Firestore +
 
 > **Lưu ý `VITE_USE_MOCK`:** nếu `VITE_USE_MOCK=true`, app luôn chạy Mock và bỏ qua `VITE_DB_PROVIDER`. Trên Vercel phải để `false`.
 > **Quyền riêng tư (`members_private`):** Security Rules ẩn `phone` và `email` khỏi Viewer công khai (chỉ giữ công khai thông tin ngân hàng cho VietQR); chỉ Editor/Admin hoặc chính thành viên đã xác minh email mới truy cập được `members_private`.
-> **Thứ tự deploy an toàn khi nâng cấp:** (1) Deploy GAS trước → (2) Deploy Frontend → (3) Admin chạy **Tách SĐT/Email sang vùng riêng tư** (hoặc Pull) → (4) Publish `firestore.rules`.
+> **Thứ tự deploy an toàn khi nâng cấp:** (1) Publish `firebase/firestore.rules` trên Firebase Console trước → (2) Deploy GAS → (3) Deploy Frontend → (4) Admin chạy **Tách SĐT/Email sang vùng riêng tư** (hoặc Pull).
 
 ## Vận Hành Hằng Ngày & Sao Lưu Định Kỳ
 

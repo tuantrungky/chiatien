@@ -358,12 +358,14 @@ async function verifyActorEditorRole(idToken: string): Promise<{
   const actor = resolveCurrentActor(idToken);
   const [editorSnap, privSnap] = await Promise.all([
     getDoc(doc(db, 'editors', actor.email)),
-    getDocs(query(collection(db, 'members_private'), where('email', '==', actor.email))),
+    getDocs(query(collection(db, 'members_private'), where('email', '==', actor.email))).catch(
+      () => null
+    ),
   ]);
 
   let linkedMemberId = '';
   let linkedMemberName = '';
-  const privDoc = privSnap.docs[0]?.data() as MemberPrivateRecord | undefined;
+  const privDoc = privSnap?.docs[0]?.data() as MemberPrivateRecord | undefined;
   if (privDoc?.member_id) {
     linkedMemberId = privDoc.member_id;
     const mSnap = await getDoc(doc(db, 'members', linkedMemberId));
@@ -424,12 +426,13 @@ async function assertEditorActor(idToken: string): Promise<{ email: string; role
 
 function mapFirebaseError(err: unknown): never {
   if (err instanceof ApiClientError) throw err;
+  console.error('[Firestore Error]', err);
   const code = typeof err === 'object' && err && 'code' in err ? String((err as { code: unknown }).code) : '';
   const message = err instanceof Error ? err.message : 'Lỗi thao tác Firebase Firestore.';
   if (code === 'permission-denied' || message.includes('Missing or insufficient permissions')) {
     throw new ApiClientError(
       'FORBIDDEN',
-      'Bạn không có quyền thực hiện thao tác này trên Firestore (kiểm tra danh sách Editors / Security Rules).',
+      'Bạn không có quyền thực hiện thao tác này trên Firestore (kiểm tra danh sách Editors và đảm bảo đã Publish file firebase/firestore.rules mới nhất có collection members_private).',
       403
     );
   }
@@ -529,79 +532,87 @@ export async function exportAllRawTablesFromFirestore(): Promise<RawClubTables> 
 export async function migrateMembersPrivateOnFirestore(
   actorEmail: string
 ): Promise<{ migrated: number; cleaned: number }> {
-  const db = getFirebaseDb();
-  const [membersSnap, privSnap] = await Promise.all([
-    getDocs(collection(db, 'members')),
-    getDocs(collection(db, 'members_private')),
-  ]);
+  try {
+    const db = getFirebaseDb();
+    const [membersSnap, privSnap] = await Promise.all([
+      getDocs(collection(db, 'members')),
+      getDocs(collection(db, 'members_private')),
+    ]);
 
-  const existingPriv = new Map<string, MemberPrivateRecord>(
-    snapToDocs<MemberPrivateRecord>(privSnap).map((p) => [p.member_id, p])
-  );
-  const now = nowIsoVN();
-  const ops: BatchOp[] = [];
-  let migrated = 0;
-  let cleaned = 0;
+    const existingPriv = new Map<string, MemberPrivateRecord>(
+      snapToDocs<MemberPrivateRecord>(privSnap).map((p) => [p.member_id, p])
+    );
+    const now = nowIsoVN();
+    const ops: BatchOp[] = [];
+    let migrated = 0;
+    let cleaned = 0;
 
-  for (const mDoc of membersSnap.docs) {
-    const raw = mDoc.data() as Member & Record<string, unknown>;
-    const memberId = String(raw.member_id || mDoc.id).trim();
-    if (!memberId) continue;
+    for (const mDoc of membersSnap.docs) {
+      const raw = mDoc.data() as Member & Record<string, unknown>;
+      const memberId = String(raw.member_id || mDoc.id).trim();
+      if (!memberId) continue;
 
-    const prevPriv = existingPriv.get(memberId);
-    const phone = String(raw.phone ?? prevPriv?.phone ?? '').trim();
-    const email = String(raw.email ?? prevPriv?.email ?? '').trim().toLowerCase();
-    const hasEmail = Boolean(email || raw.has_email);
+      const prevPriv = existingPriv.get(memberId);
+      const phone = String(raw.phone ?? prevPriv?.phone ?? '').trim();
+      const email = String(raw.email ?? prevPriv?.email ?? '').trim().toLowerCase();
+      const hasEmail = Boolean(email || raw.has_email);
 
-    if (!prevPriv || (raw.phone !== undefined && raw.phone !== prevPriv.phone) || (raw.email !== undefined && String(raw.email).toLowerCase() !== prevPriv.email)) {
-      ops.push({
-        type: 'set',
-        col: 'members_private',
-        id: memberId,
-        data: {
-          member_id: memberId,
-          phone,
-          email,
-          updated_at: prevPriv?.updated_at || raw.updated_at || now,
-        },
-      });
-      migrated++;
+      if (
+        !prevPriv ||
+        (raw.phone !== undefined && raw.phone !== prevPriv.phone) ||
+        (raw.email !== undefined && String(raw.email).toLowerCase() !== prevPriv.email)
+      ) {
+        ops.push({
+          type: 'set',
+          col: 'members_private',
+          id: memberId,
+          data: {
+            member_id: memberId,
+            phone,
+            email,
+            updated_at: prevPriv?.updated_at || raw.updated_at || now,
+          },
+        });
+        migrated++;
+      }
+
+      if ('phone' in raw || 'email' in raw || raw.has_email !== hasEmail) {
+        const { phone: _p, email: _e, ...publicFields } = raw;
+        ops.push({
+          type: 'set',
+          col: 'members',
+          id: memberId,
+          data: {
+            ...publicFields,
+            member_id: memberId,
+            has_email: hasEmail,
+            updated_at: raw.updated_at || now,
+          },
+        });
+        cleaned++;
+      }
     }
 
-    if ('phone' in raw || 'email' in raw || raw.has_email !== hasEmail) {
-      const { phone: _p, email: _e, ...publicFields } = raw;
+    if (ops.length > 0) {
       ops.push({
         type: 'set',
-        col: 'members',
-        id: memberId,
+        col: '_meta',
+        id: 'sync_state',
         data: {
-          ...publicFields,
-          member_id: memberId,
-          has_email: hasEmail,
-          updated_at: raw.updated_at || now,
+          dataRevision: Date.now(),
+          updatedAt: now,
+          updatedBy: actorEmail,
+          schemaVersion: 1,
         },
+        merge: true,
       });
-      cleaned++;
+      await commitOpsInChunks(ops);
     }
-  }
 
-  if (ops.length > 0) {
-    ops.push({
-      type: 'set',
-      col: '_meta',
-      id: 'sync_state',
-      data: {
-        dataRevision: Date.now(),
-        updatedAt: now,
-        updatedBy: actorEmail,
-        schemaVersion: 1,
-      },
-      merge: true,
-    });
-    await commitOpsInChunks(ops);
+    return { migrated, cleaned };
+  } catch (err) {
+    mapFirebaseError(err);
   }
-
-  return { migrated, cleaned };
 }
 
 export async function importAllRawTablesToFirestore(
@@ -1380,11 +1391,17 @@ export const firebaseProvider: DataProvider = {
       await assertEditorActor(idToken);
       const db = getFirebaseDb();
       const [privSnap, membersSnap] = await Promise.all([
-        getDocs(collection(db, 'members_private')),
+        getDocs(collection(db, 'members_private')).catch((err) => {
+          console.warn(
+            '[Firestore] Không đọc được members_private (hãy Publish firebase/firestore.rules mới nhất):',
+            err
+          );
+          return null;
+        }),
         getDocs(collection(db, 'members')),
       ]);
       const privById = new Map<string, MemberPrivateRecord>(
-        snapToDocs<MemberPrivateRecord>(privSnap).map((p) => [p.member_id, p])
+        (privSnap ? snapToDocs<MemberPrivateRecord>(privSnap) : []).map((p) => [p.member_id, p])
       );
       return snapToDocs<Member>(membersSnap).map((m) => {
         const p = privById.get(m.member_id);
