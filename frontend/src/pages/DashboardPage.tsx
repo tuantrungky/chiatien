@@ -5,6 +5,8 @@ import {
   BarChart3,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   HelpCircle,
   PieChart as PieChartIcon,
   Plus,
@@ -27,12 +29,16 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { DebtFilterBar } from '../components/DebtFilterBar';
 import { MyDebtFilterBar } from '../components/MyDebtFilterBar';
 import { OverdueBadge } from '../components/OverdueBadge';
 import { PeriodFilterBar } from '../components/PeriodFilterBar';
 import type { VietQRModalData } from '../components/VietQRModal';
 import { useAuth } from '../contexts/AuthContext';
 import type {
+  BadmintonAdhocDueItem,
+  BadmintonGuestDueItem,
+  BadmintonMonthlyDueItem,
   BootstrapData,
   DashboardData,
   MonthlyBillData,
@@ -51,6 +57,14 @@ import {
   getNowVN,
   getWeekdayIndex,
 } from '../utils/dateFilters';
+import {
+  DEFAULT_DEBT_FILTER,
+  countActiveDebtFilters,
+  extractCollectorOptions,
+  extractDateOptions,
+  filterDebts,
+  type DebtFilterState,
+} from '../utils/debtFilters';
 import { getOverdueInfo } from '../utils/overdue';
 import { getEffectiveScheduleStatus } from '../utils/schedule';
 import { formatVND } from '../utils/vietqr';
@@ -107,6 +121,9 @@ export function DashboardPage({
   const [chartMode, setChartMode] = useState<'BAR' | 'PIE'>('BAR');
   const [showFormula, setShowFormula] = useState<boolean>(false);
   const [debtViewMode, setDebtViewMode] = useState<'ALL' | 'MINE'>('ALL');
+  const [debtFilters, setDebtFilters] = useState<DebtFilterState>(DEFAULT_DEBT_FILTER);
+  const [showAllBadminton, setShowAllBadminton] = useState<boolean>(false);
+  const [showAllDrinking, setShowAllDrinking] = useState<boolean>(false);
 
   const treasurer = useMemo(
     () =>
@@ -115,6 +132,41 @@ export function DashboardPage({
       ),
     [bootstrap]
   );
+
+  const collectorOptions = useMemo(
+    () => extractCollectorOptions(debts, simplifiedDrinkingDebts, treasurer),
+    [debts, simplifiedDrinkingDebts, treasurer]
+  );
+  const dateOptions = useMemo(
+    () => extractDateOptions(debts, simplifiedDrinkingDebts),
+    [debts, simplifiedDrinkingDebts]
+  );
+  const filteredDebts = useMemo(
+    () =>
+      filterDebts({
+        debts,
+        simplifiedDrinkingDebts,
+        members: bootstrap?.members || [],
+        treasurer,
+        onlyMine: debtViewMode === 'MINE',
+        myMemberId,
+        filters: debtFilters,
+      }),
+    [debts, simplifiedDrinkingDebts, bootstrap?.members, treasurer, debtViewMode, myMemberId, debtFilters]
+  );
+  const activeFilterCount = countActiveDebtFilters(debtFilters);
+
+  const handleChangeDebtFilters = (next: DebtFilterState) => {
+    setDebtFilters(next);
+    setShowAllBadminton(false);
+    setShowAllDrinking(false);
+  };
+
+  const handleChangeDebtViewMode = (mode: 'ALL' | 'MINE') => {
+    setDebtViewMode(mode);
+    setShowAllBadminton(false);
+    setShowAllDrinking(false);
+  };
 
   const periodSessions = useMemo(
     () => filterByPeriod(sessions, (s) => s.date, periodType, refDate),
@@ -147,7 +199,6 @@ export function DashboardPage({
     [drinkingPeriodSessions]
   );
 
-  const adhocDues = debts?.badminton.adhocDues ?? [];
   const badmintonUnpaid = debts?.badminton.totalOutstanding ?? 0;
   const drinkingUnpaid = simplifiedDrinkingDebts.totalOutstanding;
 
@@ -631,311 +682,398 @@ export function DashboardPage({
         myMemberId={myMemberId}
         onSelectMemberId={setMyMemberId}
         viewMode={debtViewMode}
-        onChangeViewMode={setDebtViewMode}
+        onChangeViewMode={handleChangeDebtViewMode}
         debts={debts}
         simplifiedDrinkingDebts={simplifiedDrinkingDebts}
       />
 
+      {/* Bộ lọc chi tiết danh sách công nợ */}
+      <DebtFilterBar
+        filters={debtFilters}
+        onChange={handleChangeDebtFilters}
+        collectorOptions={collectorOptions}
+        dateOptions={dateOptions}
+        categoryCounts={filteredDebts.categoryCounts}
+        totalFilteredCount={filteredDebts.totalFilteredCount}
+        totalUnfilteredCount={filteredDebts.totalUnfilteredCount}
+      />
+
       {/* Khối 1: Nợ Cầu lông (Tháng + Phát sinh + Vãng lai) */}
-      <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">
-              Cầu lông cần chuyển khoản
-            </h2>
-            <p className="text-xs text-slate-500">
-              Tiền tháng MAIN, cầu phát sinh &amp; phí vãng lai (tách riêng Ăn nhậu)
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onGoToDebts}
-            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer shrink-0"
-          >
-            Xem chi tiết →
-          </button>
-        </div>
-
-        {(() => {
-          const onlyMine = debtViewMode === 'MINE' && Boolean(myMemberId);
-          const visibleMonthly = (debts?.badminton.monthlyDues || []).filter(
-            (d) => !onlyMine || d.member_id === myMemberId
-          );
-          const visibleAdhoc = adhocDues.filter(
-            (a) => !onlyMine || a.member_id === myMemberId
-          );
-          const visibleGuest = (debts?.badminton.guestDues || []).filter(
-            (g) => !onlyMine || g.member_id === myMemberId
-          );
-
-          if (visibleMonthly.length === 0 && visibleGuest.length === 0 && visibleAdhoc.length === 0) {
-            return (
-              <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
-                {onlyMine
-                  ? 'Bạn không có khoản nợ Cầu lông nào cần chuyển!'
-                  : 'Mọi thành viên & vãng lai đã đóng đủ tiền Cầu lông!'}
+      {filteredDebts.showBadmintonSection && (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Cầu lông cần chuyển khoản
+                </h2>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                  {filteredDebts.monthlyDues.length +
+                    filteredDebts.adhocDues.length +
+                    filteredDebts.guestDues.length}{' '}
+                  khoản • {formatVND(filteredDebts.filteredBadmintonTotal)}
+                </span>
               </div>
-            );
-          }
-
-          return (
-            <div className="divide-y divide-slate-100">
-              {visibleMonthly.map((d) => {
-                const dateRef = d.issued_at || `${d.month}-01`;
-                const ov = getOverdueInfo(dateRef, todayStr);
-                const isMine = myMemberId === d.member_id;
-                return (
-                  <div
-                    key={d.due_id}
-                    className={`p-3.5 flex items-center justify-between gap-2.5 ${
-                      ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-sm text-slate-900">{d.member_name}</span>
-                        {isMine && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
-                            Bạn
-                          </span>
-                        )}
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                          Cầu T{d.month.slice(5, 7)}
-                        </span>
-                        {(d.credit_amount ?? 0) > 0 && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
-                            −góp cầu
-                          </span>
-                        )}
-                        <OverdueBadge fromDate={dateRef} todayStr={todayStr} />
-                      </div>
-                      <p className="text-sm font-extrabold text-rose-600 mt-0.5">
-                        {formatVND(d.amount)} → {treasurer?.name || 'Thủ quỹ'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenQr({
-                          title: `${d.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
-                          subtitle: `Tiền cầu tháng ${d.month.slice(5, 7)}`,
-                          amount: d.amount,
-                          transferContent: d.transferContent,
-                          bankName: debts?.badminton.treasurerBank?.bankName || '',
-                          bankBin: debts?.badminton.treasurerBank?.bankBin || '',
-                          accountNo: debts?.badminton.treasurerBank?.accountNo || '',
-                          accountName: debts?.badminton.treasurerBank?.accountName || '',
-                          vietQrUrl: d.vietQrUrl,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>VietQR</span>
-                    </button>
-                  </div>
-                );
-              })}
-
-              {visibleAdhoc.map((a) => {
-                const ov = getOverdueInfo(a.session_date, todayStr);
-                const isMine = myMemberId === a.member_id;
-                return (
-                  <div
-                    key={a.attendance_id}
-                    className={`p-3.5 flex items-center justify-between gap-2.5 ${
-                      ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-sm text-slate-900">{a.member_name}</span>
-                        {isMine && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
-                            Bạn
-                          </span>
-                        )}
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
-                          Phát sinh {formatShortDateVN(a.session_date)}
-                        </span>
-                        <OverdueBadge fromDate={a.session_date} todayStr={todayStr} />
-                      </div>
-                      <p className="text-sm font-extrabold text-rose-600 mt-0.5">
-                        {formatVND(a.amount)} → {a.creditor_name}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenQr({
-                          title: `${a.member_name} → ${a.creditor_name}`,
-                          subtitle: `${a.session_title} (${formatDateVN(a.session_date)})`,
-                          amount: a.amount,
-                          transferContent: a.transferContent,
-                          bankName: a.creditorBank?.bankName || '',
-                          bankBin: a.creditorBank?.bankBin || '',
-                          accountNo: a.creditorBank?.accountNo || '',
-                          accountName: a.creditorBank?.accountName || '',
-                          vietQrUrl: a.vietQrUrl,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>VietQR</span>
-                    </button>
-                  </div>
-                );
-              })}
-
-              {visibleGuest.map((g) => {
-                const ov = getOverdueInfo(g.session_date, todayStr);
-                const isMine = myMemberId === g.member_id;
-                return (
-                  <div
-                    key={g.attendance_id}
-                    className={`p-3.5 flex items-center justify-between gap-2.5 ${
-                      ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-sm text-slate-900">{g.member_name}</span>
-                        {isMine && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
-                            Bạn
-                          </span>
-                        )}
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                          VL {formatShortDateVN(g.session_date)}
-                        </span>
-                        <OverdueBadge fromDate={g.session_date} todayStr={todayStr} />
-                      </div>
-                      <p className="text-sm font-extrabold text-rose-600 mt-0.5">
-                        {formatVND(g.amount)} → {treasurer?.name || 'Thủ quỹ'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenQr({
-                          title: `${g.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
-                          subtitle: `${g.session_title} (${formatDateVN(g.session_date)})`,
-                          amount: g.amount,
-                          transferContent: g.transferContent,
-                          bankName: debts?.badminton.treasurerBank?.bankName || '',
-                          bankBin: debts?.badminton.treasurerBank?.bankBin || '',
-                          accountNo: debts?.badminton.treasurerBank?.accountNo || '',
-                          accountName: debts?.badminton.treasurerBank?.accountName || '',
-                          vietQrUrl: g.vietQrUrl,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>VietQR</span>
-                    </button>
-                  </div>
-                );
-              })}
+              <p className="text-xs text-slate-500">
+                Tiền tháng MAIN, cầu phát sinh &amp; phí vãng lai (tách riêng Ăn nhậu)
+              </p>
             </div>
-          );
-        })()}
-      </section>
+            <button
+              type="button"
+              onClick={onGoToDebts}
+              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer shrink-0"
+            >
+              Xem chi tiết →
+            </button>
+          </div>
+
+          {(() => {
+            type BadmintonDebtRow =
+              | { kind: 'MONTHLY'; item: BadmintonMonthlyDueItem }
+              | { kind: 'ADHOC'; item: BadmintonAdhocDueItem }
+              | { kind: 'GUEST'; item: BadmintonGuestDueItem };
+
+            const allRows: BadmintonDebtRow[] = [
+              ...filteredDebts.monthlyDues.map((item) => ({ kind: 'MONTHLY' as const, item })),
+              ...filteredDebts.adhocDues.map((item) => ({ kind: 'ADHOC' as const, item })),
+              ...filteredDebts.guestDues.map((item) => ({ kind: 'GUEST' as const, item })),
+            ];
+
+            if (allRows.length === 0) {
+              return (
+                <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
+                  {activeFilterCount > 0
+                    ? 'Không có khoản nợ Cầu lông nào khớp bộ lọc.'
+                    : debtViewMode === 'MINE' && myMemberId
+                    ? 'Bạn không có khoản nợ Cầu lông nào cần chuyển!'
+                    : 'Mọi thành viên & vãng lai đã đóng đủ tiền Cầu lông!'}
+                </div>
+              );
+            }
+
+            const DASHBOARD_LIMIT = 5;
+            const visibleRows = showAllBadminton ? allRows : allRows.slice(0, DASHBOARD_LIMIT);
+            const hiddenCount = Math.max(0, allRows.length - DASHBOARD_LIMIT);
+
+            return (
+              <>
+                <div className="divide-y divide-slate-100">
+                  {visibleRows.map((row) => {
+                    if (row.kind === 'MONTHLY') {
+                      const d = row.item;
+                      const dateRef = d.issued_at || `${d.month}-01`;
+                      const ov = getOverdueInfo(dateRef, todayStr);
+                      const isMine = myMemberId === d.member_id;
+                      return (
+                        <div
+                          key={d.due_id}
+                          className={`p-3.5 flex items-center justify-between gap-2.5 ${
+                            ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-sm text-slate-900">{d.member_name}</span>
+                              {isMine && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
+                                  Bạn
+                                </span>
+                              )}
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                                Cầu T{d.month.slice(5, 7)}
+                              </span>
+                              {(d.credit_amount ?? 0) > 0 && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                                  −góp cầu
+                                </span>
+                              )}
+                              <OverdueBadge fromDate={dateRef} todayStr={todayStr} />
+                            </div>
+                            <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                              {formatVND(d.amount)} → {treasurer?.name || 'Thủ quỹ'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenQr({
+                                title: `${d.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
+                                subtitle: `Tiền cầu tháng ${d.month.slice(5, 7)}`,
+                                amount: d.amount,
+                                transferContent: d.transferContent,
+                                bankName: debts?.badminton.treasurerBank?.bankName || '',
+                                bankBin: debts?.badminton.treasurerBank?.bankBin || '',
+                                accountNo: debts?.badminton.treasurerBank?.accountNo || '',
+                                accountName: debts?.badminton.treasurerBank?.accountName || '',
+                                vietQrUrl: d.vietQrUrl,
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                            <span>VietQR</span>
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    if (row.kind === 'ADHOC') {
+                      const a = row.item;
+                      const ov = getOverdueInfo(a.session_date, todayStr);
+                      const isMine = myMemberId === a.member_id;
+                      return (
+                        <div
+                          key={a.attendance_id}
+                          className={`p-3.5 flex items-center justify-between gap-2.5 ${
+                            ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-sm text-slate-900">{a.member_name}</span>
+                              {isMine && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
+                                  Bạn
+                                </span>
+                              )}
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                                Phát sinh {formatShortDateVN(a.session_date)}
+                              </span>
+                              <OverdueBadge fromDate={a.session_date} todayStr={todayStr} />
+                            </div>
+                            <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                              {formatVND(a.amount)} → {a.creditor_name}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenQr({
+                                title: `${a.member_name} → ${a.creditor_name}`,
+                                subtitle: `${a.session_title} (${formatDateVN(a.session_date)})`,
+                                amount: a.amount,
+                                transferContent: a.transferContent,
+                                bankName: a.creditorBank?.bankName || '',
+                                bankBin: a.creditorBank?.bankBin || '',
+                                accountNo: a.creditorBank?.accountNo || '',
+                                accountName: a.creditorBank?.accountName || '',
+                                vietQrUrl: a.vietQrUrl,
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                            <span>VietQR</span>
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    const g = row.item;
+                    const ov = getOverdueInfo(g.session_date, todayStr);
+                    const isMine = myMemberId === g.member_id;
+                    return (
+                      <div
+                        key={g.attendance_id}
+                        className={`p-3.5 flex items-center justify-between gap-2.5 ${
+                          ov.rowClass || (isMine ? 'bg-sky-50/40' : '')
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-sm text-slate-900">{g.member_name}</span>
+                            {isMine && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
+                                Bạn
+                              </span>
+                            )}
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                              VL {formatShortDateVN(g.session_date)}
+                            </span>
+                            <OverdueBadge fromDate={g.session_date} todayStr={todayStr} />
+                          </div>
+                          <p className="text-sm font-extrabold text-rose-600 mt-0.5">
+                            {formatVND(g.amount)} → {treasurer?.name || 'Thủ quỹ'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onOpenQr({
+                              title: `${g.member_name} → Thủ quỹ (${treasurer?.name || ''})`,
+                              subtitle: `${g.session_title} (${formatDateVN(g.session_date)})`,
+                              amount: g.amount,
+                              transferContent: g.transferContent,
+                              bankName: debts?.badminton.treasurerBank?.bankName || '',
+                              bankBin: debts?.badminton.treasurerBank?.bankBin || '',
+                              accountNo: debts?.badminton.treasurerBank?.accountNo || '',
+                              accountName: debts?.badminton.treasurerBank?.accountName || '',
+                              vietQrUrl: g.vietQrUrl,
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>VietQR</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {hiddenCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllBadminton((v) => !v)}
+                    className="w-full py-2.5 px-4 border-t border-slate-100 bg-slate-50/70 hover:bg-slate-100 text-xs font-bold text-emerald-700 flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    {showAllBadminton ? (
+                      <>
+                        <ChevronUp className="w-4 h-4" />
+                        <span>Thu gọn danh sách</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4" />
+                        <span>Xem thêm {hiddenCount} khoản nữa</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </section>
+      )}
 
       {/* Khối 2: Chuyển khoản Ăn nhậu (tối ưu riêng) */}
-      <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">Chuyển khoản Ăn nhậu</h2>
-            <p className="text-xs text-slate-500">Đã cấn trừ món góp &amp; gộp các buổi nhậu</p>
-          </div>
-          <button
-            type="button"
-            onClick={onGoToDebts}
-            className="text-xs font-semibold text-orange-600 hover:text-orange-700 cursor-pointer shrink-0"
-          >
-            Xem chi tiết →
-          </button>
-        </div>
-
-        {(() => {
-          const onlyMine = debtViewMode === 'MINE' && Boolean(myMemberId);
-          const visibleTransfers = simplifiedDrinkingDebts.transfers.filter(
-            (tr) => !onlyMine || tr.fromMember.member_id === myMemberId
-          );
-
-          if (visibleTransfers.length === 0) {
-            return (
-              <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
-                {onlyMine
-                  ? 'Bạn không có khoản nợ Ăn nhậu nào cần chuyển!'
-                  : 'Không có khoản nợ Ăn nhậu nào cần chuyển!'}
+      {filteredDebts.showDrinkingSection && (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm font-bold text-slate-900">Chuyển khoản Ăn nhậu</h2>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">
+                  {filteredDebts.drinkingTransfers.length} khoản •{' '}
+                  {formatVND(filteredDebts.filteredDrinkingTotal)}
+                </span>
               </div>
-            );
-          }
-
-          return (
-            <div className="divide-y divide-slate-100">
-              {visibleTransfers.map((tr) => {
-                const oldestDate = tr.breakdownSessions.map((b) => b.sessionDate).sort()[0];
-                const ov = oldestDate ? getOverdueInfo(oldestDate, todayStr) : null;
-                const isMine = myMemberId === tr.fromMember.member_id;
-                return (
-                  <div
-                    key={`${tr.fromMember.member_id}-${tr.toMember.member_id}`}
-                    className={`p-3.5 flex items-center justify-between gap-2.5 ${
-                      ov?.rowClass || (isMine ? 'bg-sky-50/40' : '')
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap text-sm">
-                        <span className="font-bold text-slate-900">{tr.fromMember.name}</span>
-                        {isMine && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
-                            Bạn
-                          </span>
-                        )}
-                        <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="font-semibold text-orange-700">{tr.toMember.name}</span>
-                        {oldestDate && <OverdueBadge fromDate={oldestDate} todayStr={todayStr} />}
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
-                        <span className="font-extrabold text-rose-600 text-sm">
-                          {formatVND(tr.amount)}
-                        </span>
-                        <span>•</span>
-                        <span>{tr.breakdownSessions.length} buổi nhậu</span>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenQr({
-                          title: `${tr.fromMember.name} → ${tr.toMember.name}`,
-                          subtitle: `Tiền ăn nhậu (${tr.breakdownSessions.length} buổi)`,
-                          amount: tr.amount,
-                          transferContent: tr.transferContent,
-                          bankName: tr.toMember.bank_name,
-                          bankBin: tr.toMember.bank_bin,
-                          accountNo: tr.toMember.account_no,
-                          accountName: tr.toMember.account_name || tr.toMember.name,
-                          vietQrUrl: tr.vietQrUrl,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>VietQR</span>
-                    </button>
-                  </div>
-                );
-              })}
+              <p className="text-xs text-slate-500">Đã cấn trừ món góp &amp; gộp các buổi nhậu</p>
             </div>
-          );
-        })()}
-      </section>
+            <button
+              type="button"
+              onClick={onGoToDebts}
+              className="text-xs font-semibold text-orange-600 hover:text-orange-700 cursor-pointer shrink-0"
+            >
+              Xem chi tiết →
+            </button>
+          </div>
+
+          {(() => {
+            const visibleTransfers = filteredDebts.drinkingTransfers;
+
+            if (visibleTransfers.length === 0) {
+              return (
+                <div className="p-5 text-center text-xs sm:text-sm text-slate-500">
+                  {activeFilterCount > 0
+                    ? 'Không có khoản nợ Ăn nhậu nào khớp bộ lọc.'
+                    : debtViewMode === 'MINE' && myMemberId
+                    ? 'Bạn không có khoản nợ Ăn nhậu nào cần chuyển!'
+                    : 'Không có khoản nợ Ăn nhậu nào cần chuyển!'}
+                </div>
+              );
+            }
+
+            const DASHBOARD_LIMIT = 5;
+            const slicedTransfers = showAllDrinking
+              ? visibleTransfers
+              : visibleTransfers.slice(0, DASHBOARD_LIMIT);
+            const hiddenCount = Math.max(0, visibleTransfers.length - DASHBOARD_LIMIT);
+
+            return (
+              <>
+                <div className="divide-y divide-slate-100">
+                  {slicedTransfers.map((tr) => {
+                    const oldestDate = tr.breakdownSessions.map((b) => b.sessionDate).sort()[0];
+                    const ov = oldestDate ? getOverdueInfo(oldestDate, todayStr) : null;
+                    const isMine = myMemberId === tr.fromMember.member_id;
+                    return (
+                      <div
+                        key={`${tr.fromMember.member_id}-${tr.toMember.member_id}`}
+                        className={`p-3.5 flex items-center justify-between gap-2.5 ${
+                          ov?.rowClass || (isMine ? 'bg-sky-50/40' : '')
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap text-sm">
+                            <span className="font-bold text-slate-900">{tr.fromMember.name}</span>
+                            {isMine && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-600 text-white">
+                                Bạn
+                              </span>
+                            )}
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="font-semibold text-orange-700">{tr.toMember.name}</span>
+                            {oldestDate && <OverdueBadge fromDate={oldestDate} todayStr={todayStr} />}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
+                            <span className="font-extrabold text-rose-600 text-sm">
+                              {formatVND(tr.amount)}
+                            </span>
+                            <span>•</span>
+                            <span>{tr.breakdownSessions.length} buổi nhậu</span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onOpenQr({
+                              title: `${tr.fromMember.name} → ${tr.toMember.name}`,
+                              subtitle: `Tiền ăn nhậu (${tr.breakdownSessions.length} buổi)`,
+                              amount: tr.amount,
+                              transferContent: tr.transferContent,
+                              bankName: tr.toMember.bank_name,
+                              bankBin: tr.toMember.bank_bin,
+                              accountNo: tr.toMember.account_no,
+                              accountName: tr.toMember.account_name || tr.toMember.name,
+                              vietQrUrl: tr.vietQrUrl,
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>VietQR</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {hiddenCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDrinking((v) => !v)}
+                    className="w-full py-2.5 px-4 border-t border-slate-100 bg-slate-50/70 hover:bg-slate-100 text-xs font-bold text-orange-600 flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    {showAllDrinking ? (
+                      <>
+                        <ChevronUp className="w-4 h-4" />
+                        <span>Thu gọn danh sách</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4" />
+                        <span>Xem thêm {hiddenCount} khoản nữa</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </section>
+      )}
 
       {/* Biểu đồ chi tiêu Cầu lông vs Ăn nhậu */}
       <section className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">

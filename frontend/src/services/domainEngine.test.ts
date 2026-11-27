@@ -211,6 +211,30 @@ describe('domainEngine - SheetService.gs Parity', () => {
     );
   });
 
+  it('planCloseMonth hỗ trợ nhập thẳng carryOutOverride dương (+) và âm (−) chuyển sang tháng kế tiếp', () => {
+    const ds = createTestDataset();
+    const closePos = planCloseMonth(
+      ds,
+      { month: '2026-11', carryOutOverride: 250000 },
+      'tuantrungky@gmail.com'
+    );
+    expect(closePos.result.bill.status).toBe('CLOSED');
+    expect(closePos.result.bill.carry_out).toBe(250000);
+    const dsPos = applyMutationPlanToDataset(ds, closePos);
+    expect(buildMonthlyBillData(dsPos, '2026-11').bill.carry_out).toBe(250000);
+    expect(buildMonthlyBillData(dsPos, '2026-12').bill.carry_in).toBe(250000);
+
+    const closeNeg = planCloseMonth(
+      dsPos,
+      { month: '2026-11', carryOutOverride: -180000 },
+      'tuantrungky@gmail.com'
+    );
+    expect(closeNeg.result.bill.carry_out).toBe(-180000);
+    const dsNeg = applyMutationPlanToDataset(dsPos, closeNeg);
+    expect(buildMonthlyBillData(dsNeg, '2026-11').bill.carry_out).toBe(-180000);
+    expect(buildMonthlyBillData(dsNeg, '2026-12').bill.carry_in).toBe(-180000);
+  });
+
   it('linkMemberEmail gỡ liên kết cũ và chặn liên kết vào thành viên đã có Gmail khác', () => {
     const ds = createTestDataset();
     const p1 = planLinkMemberEmail(ds, 'MEM_003', 'chung@gmail.com');

@@ -18,12 +18,16 @@ import {
   QrCode,
   Receipt,
   RotateCcw,
+  Search,
   Sparkles,
   Trash2,
   Trophy,
+  UserCheck,
   Users,
   Utensils,
+  X,
 } from 'lucide-react';
+import { DebtFilterBar } from '../components/DebtFilterBar';
 import { MyDebtFilterBar } from '../components/MyDebtFilterBar';
 import { OverdueBadge } from '../components/OverdueBadge';
 import type { VietQRModalData } from '../components/VietQRModal';
@@ -46,6 +50,15 @@ import type {
   SimplifiedDebtResult,
 } from '../types';
 import { formatDateVN, formatShortDateVN, getTodayDateStr } from '../utils/dateFilters';
+import {
+  DEFAULT_DEBT_FILTER,
+  countActiveDebtFilters,
+  extractCollectorOptions,
+  extractDateOptions,
+  filterDebts,
+  normalizeViText,
+  type DebtFilterState,
+} from '../utils/debtFilters';
 import { getOverdueInfo } from '../utils/overdue';
 import { formatVND } from '../utils/vietqr';
 import { buildDebtsZaloMessage } from '../utils/zaloShare';
@@ -79,11 +92,19 @@ export function DebtsAndSessionsPage({
     searchParams.get('tab') === 'sessions' ? 'SESSIONS' : 'DEBTS'
   );
   const [debtViewMode, setDebtViewMode] = useState<'ALL' | 'MINE'>('ALL');
+  const [debtFilters, setDebtFilters] = useState<DebtFilterState>(DEFAULT_DEBT_FILTER);
+  const [showAllBadminton, setShowAllBadminton] = useState<boolean>(false);
+  const [showAllDrinking, setShowAllDrinking] = useState<boolean>(false);
   const [expandedTransferKey, setExpandedTransferKey] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<'ALL' | 'BADMINTON' | 'DRINKING'>(() => {
+  const [sessionFilter, setSessionFilter] = useState<
+    'ALL' | 'BADMINTON' | 'BADMINTON_FIXED' | 'BADMINTON_ADHOC' | 'DRINKING'
+  >(() => {
     const typeParam = searchParams.get('type');
     return typeParam === 'BADMINTON' || typeParam === 'DRINKING' ? typeParam : 'ALL';
   });
+  const [sessionSearch, setSessionSearch] = useState<string>('');
+  const [sessionPayerId, setSessionPayerId] = useState<string>('');
+  const [sessionDateFilter, setSessionDateFilter] = useState<string>('');
 
   useEffect(() => {
     const tabParam = searchParams.get('tab');
@@ -102,17 +123,21 @@ export function DebtsAndSessionsPage({
       setSearchParams({}, { replace: true });
     } else {
       const nextParams: Record<string, string> = { tab: 'sessions' };
-      if (sessionFilter !== 'ALL') {
-        nextParams.type = sessionFilter;
+      if (sessionFilter === 'BADMINTON' || sessionFilter === 'BADMINTON_FIXED' || sessionFilter === 'BADMINTON_ADHOC') {
+        nextParams.type = 'BADMINTON';
+      } else if (sessionFilter === 'DRINKING') {
+        nextParams.type = 'DRINKING';
       }
       setSearchParams(nextParams, { replace: true });
     }
   };
 
-  const handleSelectSessionFilter = (nextFilter: 'ALL' | 'BADMINTON' | 'DRINKING') => {
+  const handleSelectSessionFilter = (
+    nextFilter: 'ALL' | 'BADMINTON' | 'BADMINTON_FIXED' | 'BADMINTON_ADHOC' | 'DRINKING'
+  ) => {
     setSessionFilter(nextFilter);
     const nextParams: Record<string, string> = { tab: 'sessions' };
-    if (nextFilter !== 'ALL') {
+    if (nextFilter === 'BADMINTON' || nextFilter === 'DRINKING') {
       nextParams.type = nextFilter;
     }
     setSearchParams(nextParams, { replace: true });
@@ -151,10 +176,85 @@ export function DebtsAndSessionsPage({
     return map;
   }, [debts]);
 
-  const filteredSessions = useMemo(
-    () => sessions.filter((s) => sessionFilter === 'ALL' || s.type === sessionFilter),
-    [sessions, sessionFilter]
-  );
+  const sessionPayerOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; count: number }>();
+    const membersMap = new Map((bootstrap?.members || []).map((m) => [m.member_id, m.name]));
+    for (const s of sessions) {
+      if (!s.payer_id) continue;
+      const existing = map.get(s.payer_id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(s.payer_id, {
+          id: s.payer_id,
+          name: s.payer_name || membersMap.get(s.payer_id) || s.payer_id,
+          count: 1,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+  }, [sessions, bootstrap?.members]);
+
+  const sessionDateOptions = useMemo(() => {
+    const dayMap = new Map<string, number>();
+    const monthMap = new Map<string, number>();
+    for (const s of sessions) {
+      const day = String(s.date || '').slice(0, 10);
+      if (!day) continue;
+      dayMap.set(day, (dayMap.get(day) || 0) + 1);
+      const monthKey = `MONTH:${day.slice(0, 7)}`;
+      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + 1);
+    }
+    const dayOpts = Array.from(dayMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([value, count]) => ({ value, label: formatDateVN(value), count }));
+    const monthOpts = Array.from(monthMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([value, count]) => {
+        const m = value.slice(6);
+        const [yyyy, mm] = m.split('-');
+        return { value, label: mm && yyyy ? `Tháng ${mm}/${yyyy}` : `Tháng ${m}`, count };
+      });
+    return [...dayOpts, ...monthOpts];
+  }, [sessions]);
+
+  const filteredSessions = useMemo(() => {
+    const qNorm = normalizeViText(sessionSearch);
+    const isMonth = sessionDateFilter.startsWith('MONTH:');
+    const monthVal = isMonth ? sessionDateFilter.slice(6) : '';
+    return sessions.filter((s) => {
+      if (sessionFilter === 'BADMINTON' && s.type !== 'BADMINTON') return false;
+      if (
+        sessionFilter === 'BADMINTON_FIXED' &&
+        !(s.type === 'BADMINTON' && s.billing_mode !== 'AD_HOC')
+      ) {
+        return false;
+      }
+      if (
+        sessionFilter === 'BADMINTON_ADHOC' &&
+        !(s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC')
+      ) {
+        return false;
+      }
+      if (sessionFilter === 'DRINKING' && s.type !== 'DRINKING') return false;
+      if (sessionPayerId && s.payer_id !== sessionPayerId) return false;
+      if (sessionDateFilter) {
+        const day = String(s.date || '').slice(0, 10);
+        if (isMonth) {
+          if (day.slice(0, 7) !== monthVal) return false;
+        } else if (day !== sessionDateFilter) {
+          return false;
+        }
+      }
+      if (qNorm) {
+        const haystack = normalizeViText(
+          `${s.title} ${s.receipt_summary || ''} ${s.note || ''} ${s.payer_name || ''}`
+        );
+        if (!haystack.includes(qNorm)) return false;
+      }
+      return true;
+    });
+  }, [sessions, sessionFilter, sessionPayerId, sessionDateFilter, sessionSearch]);
 
   const handleToggleSessionDetail = async (sessionId: string, forceReload = false) => {
     if (!forceReload && expandedSessionId === sessionId) {
@@ -328,22 +428,71 @@ export function DebtsAndSessionsPage({
     }
   };
 
-  const adhocDues = debts?.badminton.adhocDues ?? [];
-  const badmintonTotal = debts?.badminton.totalOutstanding ?? 0;
-  const drinkingTotal = simplifiedDrinkingDebts.totalOutstanding;
+  const collectorOptions = useMemo(
+    () => extractCollectorOptions(debts, simplifiedDrinkingDebts, treasurer),
+    [debts, simplifiedDrinkingDebts, treasurer]
+  );
+  const dateOptions = useMemo(
+    () => extractDateOptions(debts, simplifiedDrinkingDebts),
+    [debts, simplifiedDrinkingDebts]
+  );
+  const filteredDebts = useMemo(
+    () =>
+      filterDebts({
+        debts,
+        simplifiedDrinkingDebts,
+        members: bootstrap?.members || [],
+        treasurer,
+        onlyMine: debtViewMode === 'MINE',
+        myMemberId,
+        filters: debtFilters,
+      }),
+    [debts, simplifiedDrinkingDebts, bootstrap?.members, treasurer, debtViewMode, myMemberId, debtFilters]
+  );
+  const activeFilterCount = countActiveDebtFilters(debtFilters);
   const onlyMine = debtViewMode === 'MINE' && Boolean(myMemberId);
-  const visibleMonthlyDues = (debts?.badminton.monthlyDues || []).filter(
-    (d) => !onlyMine || d.member_id === myMemberId
-  );
-  const visibleGuestDues = (debts?.badminton.guestDues || []).filter(
-    (g) => !onlyMine || g.member_id === myMemberId
-  );
-  const visibleAdhocDues = adhocDues.filter(
-    (a) => !onlyMine || a.member_id === myMemberId
-  );
-  const visibleDrinkingTransfers = simplifiedDrinkingDebts.transfers.filter(
-    (tr) => !onlyMine || tr.fromMember.member_id === myMemberId
-  );
+  const badmintonTotal =
+    activeFilterCount > 0 || onlyMine
+      ? filteredDebts.filteredBadmintonTotal
+      : debts?.badminton.totalOutstanding ?? 0;
+  const drinkingTotal =
+    activeFilterCount > 0 || onlyMine
+      ? filteredDebts.filteredDrinkingTotal
+      : simplifiedDrinkingDebts.totalOutstanding;
+
+  const handleChangeDebtFilters = (next: DebtFilterState) => {
+    setDebtFilters(next);
+    setShowAllBadminton(false);
+    setShowAllDrinking(false);
+  };
+
+  const handleChangeDebtViewMode = (mode: 'ALL' | 'MINE') => {
+    setDebtViewMode(mode);
+    setShowAllBadminton(false);
+    setShowAllDrinking(false);
+  };
+
+  const DEBTS_LIST_LIMIT = 8;
+  const visibleMonthlyDues = filteredDebts.monthlyDues;
+  const visibleGuestDues = filteredDebts.guestDues;
+  const visibleAdhocDues = filteredDebts.adhocDues;
+  const visibleDrinkingTransfers = filteredDebts.drinkingTransfers;
+
+  const allBadmintonRowsCount =
+    visibleMonthlyDues.length + visibleGuestDues.length + visibleAdhocDues.length;
+  const badmintonHiddenCount = Math.max(0, allBadmintonRowsCount - DEBTS_LIST_LIMIT);
+  const drinkingHiddenCount = Math.max(0, visibleDrinkingTransfers.length - DEBTS_LIST_LIMIT);
+
+  // Giới hạn tối đa 8 dòng cầu lông khi chưa mở rộng (giữ đúng thứ tự monthly -> guest -> adhoc)
+  const monthlyLimit = showAllBadminton ? visibleMonthlyDues.length : DEBTS_LIST_LIMIT;
+  const slicedMonthlyDues = visibleMonthlyDues.slice(0, monthlyLimit);
+  const remainingAfterMonthly = Math.max(0, monthlyLimit - slicedMonthlyDues.length);
+  const slicedGuestDues = visibleGuestDues.slice(0, remainingAfterMonthly);
+  const remainingAfterGuest = Math.max(0, remainingAfterMonthly - slicedGuestDues.length);
+  const slicedAdhocDues = visibleAdhocDues.slice(0, remainingAfterGuest);
+  const slicedDrinkingTransfers = showAllDrinking
+    ? visibleDrinkingTransfers
+    : visibleDrinkingTransfers.slice(0, DEBTS_LIST_LIMIT);
 
   return (
     <div className="space-y-4">
@@ -411,9 +560,19 @@ export function DebtsAndSessionsPage({
               myMemberId={myMemberId}
               onSelectMemberId={setMyMemberId}
               viewMode={debtViewMode}
-              onChangeViewMode={setDebtViewMode}
+              onChangeViewMode={handleChangeDebtViewMode}
               debts={debts}
               simplifiedDrinkingDebts={simplifiedDrinkingDebts}
+            />
+
+            <DebtFilterBar
+              filters={debtFilters}
+              onChange={handleChangeDebtFilters}
+              collectorOptions={collectorOptions}
+              dateOptions={dateOptions}
+              categoryCounts={filteredDebts.categoryCounts}
+              totalFilteredCount={filteredDebts.totalFilteredCount}
+              totalUnfilteredCount={filteredDebts.totalUnfilteredCount}
             />
 
             <div className="flex items-center justify-end">
@@ -429,31 +588,45 @@ export function DebtsAndSessionsPage({
           </div>
 
           {/* KHỐI 1: TIỀN CẦU LÔNG (THẲNG THỦ QUỸ) */}
+          {filteredDebts.showBadmintonSection && (
           <section className="bg-white rounded-2xl border border-emerald-200 shadow-xs overflow-hidden">
             <div className="px-4 py-3 bg-emerald-50/70 border-b border-emerald-100 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Trophy className="w-4 h-4 text-emerald-700" />
                 <div>
-                  <h2 className="text-sm font-bold text-emerald-950">1. Tiền Cầu lông</h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm font-bold text-emerald-950">1. Tiền Cầu lông</h2>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white/80 text-emerald-800">
+                      {allBadmintonRowsCount} khoản
+                    </span>
+                  </div>
                   <p className="text-[11px] text-emerald-700">
                     Chuyển thẳng Thủ quỹ {treasurer?.name || ''} (không cấn trừ với tiền nhậu)
                   </p>
                 </div>
               </div>
-              <span className="text-sm font-extrabold text-rose-600">
-                {formatVND(badmintonTotal)}
-              </span>
+              <div className="text-right shrink-0">
+                <span className="text-sm font-extrabold text-rose-600">
+                  {formatVND(badmintonTotal)}
+                </span>
+                {(activeFilterCount > 0 || onlyMine) && (
+                  <p className="text-[10px] font-semibold text-emerald-800">Đang lọc</p>
+                )}
+              </div>
             </div>
 
-            {visibleMonthlyDues.length === 0 &&
-            visibleGuestDues.length === 0 &&
-            visibleAdhocDues.length === 0 ? (
+            {allBadmintonRowsCount === 0 ? (
               <div className="p-6 text-center text-xs sm:text-sm text-slate-500">
-                {onlyMine ? 'Bạn không còn khoản nợ Cầu lông nào.' : 'Không còn khoản nợ Cầu lông nào.'}
+                {activeFilterCount > 0
+                  ? 'Không có khoản nợ Cầu lông nào khớp bộ lọc.'
+                  : onlyMine
+                  ? 'Bạn không còn khoản nợ Cầu lông nào.'
+                  : 'Không còn khoản nợ Cầu lông nào.'}
               </div>
             ) : (
+              <>
               <div className="divide-y divide-slate-100">
-                {visibleMonthlyDues.map((d) => {
+                {slicedMonthlyDues.map((d) => {
                   const dateRef = d.issued_at || `${d.month}-01`;
                   const ov = getOverdueInfo(dateRef, todayStr);
                   const isMine = myMemberId === d.member_id;
@@ -529,7 +702,7 @@ export function DebtsAndSessionsPage({
                   );
                 })}
 
-                {visibleGuestDues.map((g) => {
+                {slicedGuestDues.map((g) => {
                   const ov = getOverdueInfo(g.session_date, todayStr);
                   const isMine = myMemberId === g.member_id;
                   return (
@@ -607,7 +780,7 @@ export function DebtsAndSessionsPage({
                   );
                 })}
 
-                {visibleAdhocDues.map((a) => {
+                {slicedAdhocDues.map((a) => {
                   const ov = getOverdueInfo(a.session_date, todayStr);
                   const isMine = myMemberId === a.member_id;
                   return (
@@ -686,33 +859,70 @@ export function DebtsAndSessionsPage({
                   );
                 })}
               </div>
+              {badmintonHiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllBadminton((v) => !v)}
+                  className="w-full py-2.5 px-4 border-t border-slate-100 bg-slate-50/70 hover:bg-slate-100 text-xs font-bold text-emerald-700 flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  {showAllBadminton ? (
+                    <>
+                      <ChevronUp className="w-4 h-4" />
+                      <span>Thu gọn</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-4 h-4" />
+                      <span>Xem thêm {badmintonHiddenCount} khoản nữa</span>
+                    </>
+                  )}
+                </button>
+              )}
+              </>
             )}
           </section>
+          )}
 
           {/* KHỐI 2: TIỀN ĂN NHẬU (TỐI ƯU NỘI BỘ NHÓM NHẬU) */}
+          {filteredDebts.showDrinkingSection && (
           <section className="bg-white rounded-2xl border border-orange-200 shadow-xs overflow-hidden">
             <div className="px-4 py-3 bg-orange-50/70 border-b border-orange-100 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Utensils className="w-4 h-4 text-orange-600" />
                 <div>
-                  <h2 className="text-sm font-bold text-orange-950">2. Tiền Ăn nhậu</h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm font-bold text-orange-950">2. Tiền Ăn nhậu</h2>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white/80 text-orange-800">
+                      {visibleDrinkingTransfers.length} khoản
+                    </span>
+                  </div>
                   <p className="text-[11px] text-orange-700">
                     Tự cấn trừ món góp &amp; gộp các buổi nhậu chưa trả
                   </p>
                 </div>
               </div>
-              <span className="text-sm font-extrabold text-rose-600">
-                {formatVND(drinkingTotal)}
-              </span>
+              <div className="text-right shrink-0">
+                <span className="text-sm font-extrabold text-rose-600">
+                  {formatVND(drinkingTotal)}
+                </span>
+                {(activeFilterCount > 0 || onlyMine) && (
+                  <p className="text-[10px] font-semibold text-orange-800">Đang lọc</p>
+                )}
+              </div>
             </div>
 
             {visibleDrinkingTransfers.length === 0 ? (
               <div className="p-6 text-center text-xs sm:text-sm text-slate-500">
-                {onlyMine ? 'Bạn không còn khoản nợ Ăn nhậu nào.' : 'Không còn khoản nợ Ăn nhậu nào.'}
+                {activeFilterCount > 0
+                  ? 'Không có khoản nợ Ăn nhậu nào khớp bộ lọc.'
+                  : onlyMine
+                  ? 'Bạn không còn khoản nợ Ăn nhậu nào.'
+                  : 'Không còn khoản nợ Ăn nhậu nào.'}
               </div>
             ) : (
+              <>
               <div className="divide-y divide-slate-100">
-                {visibleDrinkingTransfers.map((tr) => {
+                {slicedDrinkingTransfers.map((tr) => {
                   const key = `${tr.fromMember.member_id}-${tr.toMember.member_id}`;
                   const isExpanded = expandedTransferKey === key;
                   const isBusy = busyKey === key;
@@ -832,8 +1042,29 @@ export function DebtsAndSessionsPage({
                   );
                 })}
               </div>
+              {drinkingHiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllDrinking((v) => !v)}
+                  className="w-full py-2.5 px-4 border-t border-slate-100 bg-slate-50/70 hover:bg-slate-100 text-xs font-bold text-orange-600 flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  {showAllDrinking ? (
+                    <>
+                      <ChevronUp className="w-4 h-4" />
+                      <span>Thu gọn</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-4 h-4" />
+                      <span>Xem thêm {drinkingHiddenCount} khoản nữa</span>
+                    </>
+                  )}
+                </button>
+              )}
+              </>
             )}
           </section>
+          )}
 
           {((debts?.badminton.recentSettlements?.length ?? 0) > 0 ||
             (debts?.drinking.recentSettlements.length ?? 0) > 0) && (
@@ -915,27 +1146,114 @@ export function DebtsAndSessionsPage({
       {/* TAB 2: LỊCH SỬ CÁC BUỔI */}
       {subTab === 'SESSIONS' && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3 space-y-2.5 shadow-xs">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={sessionSearch}
+                onChange={(e) => setSessionSearch(e.target.value)}
+                placeholder="Tìm tên buổi, ghi chú, người trả..."
+                className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
+              />
+              {sessionSearch && (
+                <button
+                  type="button"
+                  onClick={() => setSessionSearch('')}
+                  aria-label="Xóa từ khóa tìm buổi"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full hover:bg-slate-200/70 flex items-center justify-center text-slate-500 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
               {[
                 { id: 'ALL' as const, label: 'Tất cả' },
                 { id: 'BADMINTON' as const, label: 'Cầu lông' },
+                { id: 'BADMINTON_FIXED' as const, label: 'Cầu cố định' },
+                { id: 'BADMINTON_ADHOC' as const, label: 'Cầu phát sinh' },
                 { id: 'DRINKING' as const, label: 'Ăn nhậu' },
               ].map((pill) => (
                 <button
                   key={pill.id}
                   type="button"
                   onClick={() => handleSelectSessionFilter(pill.id)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer ${
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer ${
                     sessionFilter === pill.id
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[#113b66] text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80'
                   }`}
                 >
                   {pill.label}
                 </button>
               ))}
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="relative">
+                <UserCheck className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  aria-label="Lọc theo người trả tiền"
+                  value={sessionPayerId}
+                  onChange={(e) => setSessionPayerId(e.target.value)}
+                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
+                >
+                  <option value="">Tất cả người trả tiền</option>
+                  {sessionPayerOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.count} buổi)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="relative">
+                <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  aria-label="Lọc theo ngày hoặc tháng"
+                  value={sessionDateFilter}
+                  onChange={(e) => setSessionDateFilter(e.target.value)}
+                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1d5fa7]"
+                >
+                  <option value="">Tất cả ngày / tháng</option>
+                  {sessionDateOptions.map((d) => (
+                    <option key={d.value} value={d.value}>
+                      {d.label} ({d.count} buổi)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {(sessionFilter !== 'ALL' ||
+              sessionSearch.trim() !== '' ||
+              sessionPayerId !== '' ||
+              sessionDateFilter !== '') && (
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-[11px]">
+                <span className="font-semibold text-slate-600">
+                  Hiển thị:{' '}
+                  <strong className="text-[#113b66]">
+                    {filteredSessions.length}/{sessions.length}
+                  </strong>{' '}
+                  buổi
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectSessionFilter('ALL');
+                    setSessionSearch('');
+                    setSessionPayerId('');
+                    setSessionDateFilter('');
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Xóa lọc</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-3">

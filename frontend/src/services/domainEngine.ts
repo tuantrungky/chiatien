@@ -24,6 +24,7 @@ import type {
   Member,
   MonthlyBill,
   MonthlyBillData,
+  MonthlyBillDetail,
   MonthlyDue,
   PeriodType,
   SaveMonthlyContributionsPayload,
@@ -404,6 +405,25 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
     guestIncome: paidAmount,
   });
 
+  let parsedBillDetail: MonthlyBillDetail = {};
+  if (billRow?.bill_detail) {
+    try {
+      const parsed = JSON.parse(billRow.bill_detail);
+      if (parsed && typeof parsed === 'object') {
+        parsedBillDetail = parsed as MonthlyBillDetail;
+      }
+    } catch {
+      parsedBillDetail = {};
+    }
+  }
+  const hasCarryOutOverride =
+    parsedBillDetail.carryOutOverride !== undefined &&
+    parsedBillDetail.carryOutOverride !== null &&
+    Number.isFinite(Number(parsedBillDetail.carryOutOverride));
+  const carryOut = hasCarryOutOverride
+    ? Math.round(Number(parsedBillDetail.carryOutOverride))
+    : carryIn + billedTotal + paidAmount - actualCost;
+
   const bill: MonthlyBill = {
     month: targetMonth,
     estimate,
@@ -417,7 +437,7 @@ export function buildMonthlyBillData(dataset: ClubDataset, monthStr?: string): M
     is_projected_cost: isProjectedCost,
     actual_cost_override: actualCostOverride,
     guest_income: paidAmount,
-    carry_out: carryIn + billedTotal + paidAmount - actualCost,
+    carry_out: carryOut,
     status,
     created_by: billRow?.created_by || '',
     closed_at: billRow?.closed_at || '',
@@ -2092,23 +2112,59 @@ export function planCloseMonth(
 ): BatchMutationPlan<MonthlyBillData> {
   const targetMonth = String(payload.month || getTodayDateStr().slice(0, 7)).trim();
   const current = buildMonthlyBillData(dataset, targetMonth);
-  const hasOverride =
+  const existing = dataset.monthly_bills.find((b) => b.month === targetMonth);
+
+  let parsedDetail: MonthlyBillDetail = {};
+  const rawDetail = existing?.bill_detail || current.bill.bill_detail;
+  if (rawDetail) {
+    try {
+      const parsed = JSON.parse(rawDetail);
+      if (parsed && typeof parsed === 'object') {
+        parsedDetail = parsed as MonthlyBillDetail;
+      }
+    } catch {
+      parsedDetail = {};
+    }
+  }
+
+  const hasCarryOutOverride =
+    payload.carryOutOverride !== undefined &&
+    payload.carryOutOverride !== null &&
+    Number.isFinite(Number(payload.carryOutOverride));
+  const hasActualOverride =
     payload.actualCostOverride !== undefined && payload.actualCostOverride !== null;
-  const actualCostOverride = hasOverride
+  const actualCostOverride = hasActualOverride
     ? Math.max(0, Math.round(Number(payload.actualCostOverride) || 0))
     : null;
-  const actualCost = actualCostOverride !== null ? actualCostOverride : current.bill.actual_cost;
-  const carryOut =
-    current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost;
-  const now = nowIsoVN();
 
-  const existing = dataset.monthly_bills.find((b) => b.month === targetMonth);
+  let actualCost = current.bill.actual_cost;
+  let carryOut: number;
+  let nextActualCostOverride = existing?.actual_cost_override ?? current.bill.actual_cost_override ?? null;
+
+  if (hasCarryOutOverride) {
+    carryOut = Math.round(Number(payload.carryOutOverride));
+    parsedDetail = { ...parsedDetail, carryOutOverride: carryOut };
+  } else {
+    actualCost = actualCostOverride !== null ? actualCostOverride : current.bill.actual_cost;
+    carryOut =
+      current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost;
+    nextActualCostOverride = actualCostOverride;
+    if ('carryOutOverride' in parsedDetail) {
+      const { carryOutOverride: _removed, ...rest } = parsedDetail;
+      parsedDetail = rest;
+    }
+  }
+
+  const now = nowIsoVN();
+  const nextBillDetailStr = Object.keys(parsedDetail).length > 0 ? JSON.stringify(parsedDetail) : '';
+
   const closedBill: MonthlyBill = {
     ...(existing || current.bill),
     actual_cost: actualCost,
-    actual_cost_override: actualCostOverride,
+    actual_cost_override: nextActualCostOverride,
     guest_income: current.bill.guest_income,
     carry_out: carryOut,
+    bill_detail: nextBillDetailStr,
     status: 'CLOSED',
     created_by: existing?.created_by || current.bill.created_by || editorEmail,
     closed_at: now,

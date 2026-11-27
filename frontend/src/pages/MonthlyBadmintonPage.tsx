@@ -123,7 +123,7 @@ export function MonthlyBadmintonPage({
 
   // Modal Chốt tháng
   const [closeOpen, setCloseOpen] = useState(false);
-  const [overrideCostStr, setOverrideCostStr] = useState('');
+  const [carryOutStr, setCarryOutStr] = useState('0');
 
   const settings = bootstrap?.settings;
   const members = bootstrap?.members || [];
@@ -459,26 +459,33 @@ export function MonthlyBadmintonPage({
   };
 
   const handleOpenCloseModal = () => {
-    const suggestedActual =
-      bill && bill.actual_cost > 0 ? bill.actual_cost : bill?.estimate ?? 0;
-    setOverrideCostStr(String(suggestedActual));
+    setCarryOutStr(String(bill?.carry_out ?? 0));
     setCloseOpen(true);
   };
 
   const handleCloseMonth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idToken || busyKey) return;
+    const rawTrim = carryOutStr.trim();
+    const parsedCarryOut =
+      rawTrim === '' || rawTrim === '-' ? 0 : Math.round(Number(rawTrim) || 0);
     setBusyKey('close');
     try {
-      const overrideVal =
-        overrideCostStr.trim() === '' ? null : Math.max(0, Math.round(Number(overrideCostStr) || 0));
       await closeMonth(idToken, {
         month: activeMonth,
-        actualCostOverride: overrideVal,
+        carryOutOverride: parsedCarryOut,
       });
       setCloseOpen(false);
       await onRefreshAll();
-      toast.success(`Đã chốt ${formatMonthLabel(activeMonth)} và chuyển dư sang tháng sau!`);
+      const summaryText =
+        parsedCarryOut > 0
+          ? `Dư +${formatVND(parsedCarryOut)}`
+          : parsedCarryOut < 0
+          ? `Thiếu -${formatVND(Math.abs(parsedCarryOut))}`
+          : 'Hòa 0đ';
+      toast.success(
+        `Đã chốt ${formatMonthLabel(activeMonth)} (${summaryText} chuyển sang tháng sau)!`
+      );
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -1833,7 +1840,7 @@ export function MonthlyBadmintonPage({
           <form
             onSubmit={handleCloseMonth}
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 space-y-3.5"
+            className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] space-y-3.5"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-900">
@@ -1847,29 +1854,87 @@ export function MonthlyBadmintonPage({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-slate-500">
-              Ưu tiên nhập đúng tổng tiền thực tế chủ sân chốt cuối tháng để tính dư/thiếu chuyển
-              sang tháng kế tiếp.
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Ưu tiên nhập đúng số tiền thực tế còn dư hoặc thiếu chuyển sang tháng kế tiếp.{' '}
+              <strong className="text-slate-800">Số dương (+) là dư</strong>,{' '}
+              <strong className="text-rose-700">số âm (−) là thiếu</strong>.
             </p>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">
-                Tổng chi thực tế theo chủ sân (VND)
-              </label>
-              <input
-                type="number"
-                min={0}
-                step={1000}
-                value={overrideCostStr}
-                onChange={(e) => setOverrideCostStr(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
-              />
-            </div>
+            {(() => {
+              const rawNum = Number(carryOutStr);
+              const previewVal = Number.isFinite(rawNum) ? Math.round(rawNum) : 0;
+              const absVal = Math.abs(previewVal);
+              return (
+                <>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="block text-xs font-semibold text-slate-600">
+                        Tiền dư (+) / thiếu (−) (VND)
+                      </label>
+                      <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setCarryOutStr(String(absVal))}
+                          className={`px-2 py-0.5 rounded-md cursor-pointer transition ${
+                            previewVal >= 0
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Dư (+)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCarryOutStr(absVal > 0 ? String(-absVal) : '-')}
+                          className={`px-2 py-0.5 rounded-md cursor-pointer transition ${
+                            previewVal < 0 || carryOutStr.trim().startsWith('-')
+                              ? 'bg-rose-600 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Thiếu (−)
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="number"
+                      step={1000}
+                      value={carryOutStr}
+                      onChange={(e) => setCarryOutStr(e.target.value)}
+                      placeholder="VD: 150000 hoặc -200000"
+                      className={`w-full rounded-xl border px-3 py-2.5 text-sm font-extrabold ${
+                        previewVal < 0
+                          ? 'border-rose-300 bg-rose-50/40 text-rose-700'
+                          : previewVal > 0
+                          ? 'border-blue-300 bg-blue-50/40 text-blue-700'
+                          : 'border-slate-200 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <div
+                    className={`rounded-xl px-3 py-2 text-xs font-semibold border ${
+                      previewVal > 0
+                        ? 'bg-blue-50 border-blue-200 text-blue-800'
+                        : previewVal < 0
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {previewVal > 0
+                      ? `Dư +${formatVND(previewVal)} → Tháng kế tiếp mỗi người sẽ đóng ít đi`
+                      : previewVal < 0
+                      ? `Thiếu -${formatVND(absVal)} → Tháng kế tiếp sẽ cộng bù phần thiếu`
+                      : 'Hòa 0đ → Không có tiền dư/thiếu chuyển sang tháng sau'}
+                  </div>
+                </>
+              );
+            })()}
             <button
               type="submit"
               disabled={busyKey === 'close'}
               className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold cursor-pointer disabled:opacity-60"
             >
-              {busyKey === 'close' ? 'Đang chốt tháng...' : 'Chốt & Chuyển dư sang tháng sau'}
+              {busyKey === 'close' ? 'Đang chốt tháng...' : 'Chốt & Chuyển sang tháng sau'}
             </button>
           </form>
         </div>

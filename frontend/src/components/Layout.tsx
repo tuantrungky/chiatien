@@ -98,7 +98,7 @@ export function Layout({
   children,
 }: LayoutProps) {
   const { isEditor, isLoggedIn } = useAuth();
-  const [fabOpen, setFabOpen] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [providerMode, setProviderMode] = useState<DbProviderMode>(() => getActiveProviderMode());
   const isMock = providerMode === 'mock';
   const hasOverride = Boolean(getLocalProviderOverride());
@@ -118,12 +118,15 @@ export function Layout({
   const navItems = ALL_NAV_ITEMS.filter((item) => !item.editorOnly || isEditor);
 
   const handleSelectTab = (tab: ActiveTab) => {
-    setFabOpen(false);
+    setQuickAddOpen(false);
     onChangeTab(tab);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
   };
 
   const handleTriggerCreate = (type: 'BADMINTON' | 'DRINKING') => {
-    setFabOpen(false);
+    setQuickAddOpen(false);
     onCreateSession(type);
   };
 
@@ -277,6 +280,18 @@ export function Layout({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {isEditor && activeTab !== 'create' && (
+                <button
+                  type="button"
+                  onClick={() => setQuickAddOpen(true)}
+                  className="md:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer"
+                  aria-label="Tạo buổi mới"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={onRefresh}
@@ -309,67 +324,72 @@ export function Layout({
         </main>
       </div>
 
-      {/* Mobile Floating Action Button (Editor) */}
-      {isEditor && activeTab !== 'create' && (
-        <>
-          {fabOpen && (
-            <div
-              className="md:hidden fixed inset-0 z-30 bg-slate-900/40 backdrop-blur-[1px]"
-              onClick={() => setFabOpen(false)}
-            />
-          )}
-
-          <div className="md:hidden fixed right-4 bottom-20 z-40 flex flex-col items-end gap-2.5">
-            {fabOpen && (
-              <div className="flex flex-col items-end gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
-                <button
-                  type="button"
-                  onClick={() => handleTriggerCreate('DRINKING')}
-                  className="flex items-center gap-2.5 pl-4 pr-3 py-2.5 rounded-2xl bg-white border border-orange-200 shadow-lg text-left cursor-pointer active:scale-[0.98]"
-                >
-                  <div>
-                    <p className="text-xs font-bold text-slate-900">+ Buổi Ăn nhậu</p>
-                    <p className="text-[10px] text-slate-500">Ra quán hoặc góp món tại nhà</p>
-                  </div>
-                  <span className="w-9 h-9 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0">
-                    <Utensils className="w-4 h-4" />
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleTriggerCreate('BADMINTON')}
-                  className="flex items-center gap-2.5 pl-4 pr-3 py-2.5 rounded-2xl bg-white border border-emerald-200 shadow-lg text-left cursor-pointer active:scale-[0.98]"
-                >
-                  <div>
-                    <p className="text-xs font-bold text-slate-900">+ Buổi Cầu lông</p>
-                    <p className="text-[10px] text-slate-500">Lịch cố định hoặc Phát sinh chia đều</p>
-                  </div>
-                  <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                    <Trophy className="w-4 h-4" />
-                  </span>
-                </button>
+      {/* Mobile Quick-Add Bottom Sheet (thay thế nút float để không che các nút thao tác khác) */}
+      {isEditor && activeTab !== 'create' && quickAddOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Tạo buổi nhanh"
+          className="md:hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[1px] flex items-end justify-center"
+          onClick={() => setQuickAddOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full bg-white rounded-t-3xl shadow-2xl p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] space-y-3"
+          >
+            <div className="w-10 h-1 rounded-full bg-slate-300 mx-auto" />
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Tạo buổi nhanh</h3>
+                <p className="text-xs text-slate-500">Chọn loại buổi muốn ghi nhận</p>
               </div>
-            )}
+              <button
+                type="button"
+                onClick={() => setQuickAddOpen(false)}
+                aria-label="Đóng menu thêm buổi"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setFabOpen((prev) => !prev)}
-              aria-label={fabOpen ? 'Đóng menu thêm buổi' : 'Thêm buổi mới'}
-              className={`w-14 h-14 rounded-full text-white shadow-xl flex items-center justify-center transition-transform active:scale-95 cursor-pointer ${
-                fabOpen ? 'bg-slate-800' : 'bg-emerald-600 hover:bg-emerald-700'
-              }`}
-            >
-              {fabOpen ? <X className="w-6 h-6" /> : <Plus className="w-7 h-7" />}
-            </button>
+            <div className="space-y-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => handleTriggerCreate('BADMINTON')}
+                className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-emerald-50/70 hover:bg-emerald-50 border border-emerald-200 text-left cursor-pointer active:scale-[0.99] transition"
+              >
+                <span className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <Trophy className="w-5 h-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">+ Buổi Cầu lông</p>
+                  <p className="text-xs text-slate-500">Lịch cố định hoặc Phát sinh chia đều</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleTriggerCreate('DRINKING')}
+                className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-orange-50/70 hover:bg-orange-50 border border-orange-200 text-left cursor-pointer active:scale-[0.99] transition"
+              >
+                <span className="w-11 h-11 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0">
+                  <Utensils className="w-5 h-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">+ Buổi Ăn nhậu</p>
+                  <p className="text-xs text-slate-500">Ra quán hoặc góp món tại nhà</p>
+                </div>
+              </button>
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* Mobile Bottom Navigation */}
       <nav
         aria-label="Điều hướng chính"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)] pb-[env(safe-area-inset-bottom)]"
       >
         <div
           className={`grid h-16 max-w-lg mx-auto ${

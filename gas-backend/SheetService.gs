@@ -1734,7 +1734,15 @@ function getMonthlyBillData(monthStr) {
   var actualCost = actualCostOverride !== null
     ? actualCostOverride
     : (isProjectedCost ? estimate : sessionsTotal);
-  var carryOut = carryIn + billedTotal + guestPaidAmount - actualCost;
+  var parsedBillDetail = billRow ? parseJsonSafe_(String(billRow.bill_detail || ''), {}) : {};
+  var hasCarryOutOverride = parsedBillDetail &&
+    parsedBillDetail.carryOutOverride !== undefined &&
+    parsedBillDetail.carryOutOverride !== null &&
+    parsedBillDetail.carryOutOverride !== '' &&
+    isFinite(Number(parsedBillDetail.carryOutOverride));
+  var carryOut = hasCarryOutOverride
+    ? Math.round(Number(parsedBillDetail.carryOutOverride))
+    : (carryIn + billedTotal + guestPaidAmount - actualCost);
 
   var contributions = normalizeContributionsList_(
     billRow ? parseJsonSafe_(String(billRow.shuttle_contributions || ''), []) : [],
@@ -2145,16 +2153,37 @@ function closeMonthRecord(payload, editorEmail) {
   var p = payload || {};
   var targetMonth = String(p.month || todayDateStr_().slice(0, 7)).trim();
   var current = getMonthlyBillData(targetMonth);
+  var hasCarryOutOverride = (
+    p.carryOutOverride !== undefined &&
+    p.carryOutOverride !== null &&
+    p.carryOutOverride !== '' &&
+    isFinite(Number(p.carryOutOverride))
+  );
   var overrideVal = (p.actualCostOverride !== undefined && p.actualCostOverride !== null && p.actualCostOverride !== '')
     ? Math.max(0, toInt_(p.actualCostOverride, 0))
     : null;
-  var actualCost = overrideVal !== null ? overrideVal : current.bill.actual_cost;
-  var carryOut = current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost;
+  var actualCost = hasCarryOutOverride
+    ? current.bill.actual_cost
+    : (overrideVal !== null ? overrideVal : current.bill.actual_cost);
+  var carryOut = hasCarryOutOverride
+    ? Math.round(Number(p.carryOutOverride))
+    : (current.bill.carry_in + current.bill.billed_total + current.bill.guest_income - actualCost);
   var now = nowIso_();
 
-  var billExists = getSheetObjects_('Monthly_Bills').some(function (b) {
+  var existingRows = getSheetObjects_('Monthly_Bills').filter(function (b) {
     return String(b.month || '').trim() === targetMonth;
   });
+  var billExists = existingRows.length > 0;
+  var detailObj = billExists ? parseJsonSafe_(String(existingRows[0].bill_detail || ''), {}) : {};
+  if (!detailObj || typeof detailObj !== 'object' || Array.isArray(detailObj)) {
+    detailObj = {};
+  }
+  if (hasCarryOutOverride) {
+    detailObj.carryOutOverride = carryOut;
+  } else if (detailObj.carryOutOverride !== undefined) {
+    delete detailObj.carryOutOverride;
+  }
+  var detailStr = Object.keys(detailObj).length > 0 ? JSON.stringify(detailObj) : '';
 
   if (billExists) {
     updateRowsByCondition_(
@@ -2162,9 +2191,12 @@ function closeMonthRecord(payload, editorEmail) {
       function (row) { return String(row.month || '').trim() === targetMonth; },
       function (row) {
         row.actual_cost = actualCost;
-        row.actual_cost_override = overrideVal !== null ? overrideVal : '';
+        if (!hasCarryOutOverride) {
+          row.actual_cost_override = overrideVal !== null ? overrideVal : '';
+        }
         row.guest_income = current.bill.guest_income;
         row.carry_out = carryOut;
+        row.bill_detail = detailStr;
         row.status = 'CLOSED';
         row.closed_at = now;
         row.updated_at = now;
@@ -2181,9 +2213,10 @@ function closeMonthRecord(payload, editorEmail) {
       per_member: current.bill.per_member,
       billed_total: current.bill.billed_total,
       actual_cost: actualCost,
-      actual_cost_override: overrideVal !== null ? overrideVal : '',
+      actual_cost_override: hasCarryOutOverride ? '' : (overrideVal !== null ? overrideVal : ''),
       guest_income: current.bill.guest_income,
       carry_out: carryOut,
+      bill_detail: detailStr,
       status: 'CLOSED',
       created_by: editorEmail,
       closed_at: now,

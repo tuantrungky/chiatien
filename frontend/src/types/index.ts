@@ -147,6 +147,7 @@ export interface MonthlyBillDetail {
   shuttleAmountOverride?: boolean;
   venueTotalOverride?: boolean;
   carryInOverride?: boolean;
+  carryOutOverride?: number | null;
   appliedCredits?: ShuttleContributionItem[];
   note?: string;
 }
@@ -692,6 +693,7 @@ export interface MarkDuePaidPayload {
 export interface CloseMonthPayload {
   month: string;
   actualCostOverride?: number | null;
+  carryOutOverride?: number | null;
 }
 
 export interface UpsertMemberPayload {
