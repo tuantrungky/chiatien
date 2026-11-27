@@ -1408,7 +1408,7 @@ export function CreateSessionPage({
                     >
                       {activeMembers.map((m) => (
                         <option key={m.member_id} value={m.member_id}>
-                          {m.name}
+                          {m.name} {m.member_id === defaultTreasurerId ? '(Thủ quỹ)' : ''}
                         </option>
                       ))}
                     </select>

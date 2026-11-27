@@ -1284,11 +1284,19 @@ export function DashboardPage({
                     <span className="text-xs text-slate-400">{formatDateVN(s.date)}</span>
                   </div>
                   <p className="text-sm font-semibold text-slate-900 truncate mt-1">{s.title}</p>
-                  {s.type === 'DRINKING' && (s.payer_name || s.payer_id) && (
-                    <p className="text-[11px] font-medium text-orange-700 mt-0.5 truncate">
-                      Người ứng tiền: {s.payer_name || s.payer_id}
-                    </p>
-                  )}
+                  {(s.type === 'DRINKING' || (s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC')) &&
+                    (s.payer_name || s.payer_id) && (
+                      <p
+                        className={`text-[11px] font-medium mt-0.5 truncate ${
+                          s.type === 'BADMINTON' ? 'text-sky-700' : 'text-orange-700'
+                        }`}
+                      >
+                        Người ứng tiền:{' '}
+                        {s.payer_name ||
+                          bootstrap?.members.find((m) => m.member_id === s.payer_id)?.name ||
+                          s.payer_id}
+                      </p>
+                    )}
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-sm font-bold text-slate-900">{formatVND(s.total_amount)}</p>

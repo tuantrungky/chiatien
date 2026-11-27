@@ -956,6 +956,33 @@ function resolveQuickNewGuests(
   return { allMembers, createdMembers, newGuestMemberIds, paidImmediatelySet };
 }
 
+function resolvePrimaryDrinkingPayer(
+  items: SessionItem[],
+  fallbackPayerId: string
+): string {
+  const billTotals = new Map<string, number>();
+  const anyTotals = new Map<string, number>();
+  for (const it of items) {
+    const amt = Math.max(0, Number(it.amount) || 0);
+    const mId = String(it.member_id || '').trim();
+    if (!mId || amt <= 0) continue;
+    anyTotals.set(mId, (anyTotals.get(mId) || 0) + amt);
+    if (String(it.kind || '').toUpperCase() === 'BILL') {
+      billTotals.set(mId, (billTotals.get(mId) || 0) + amt);
+    }
+  }
+  const sourceMap = billTotals.size > 0 ? billTotals : anyTotals;
+  let bestId = '';
+  let bestAmt = -1;
+  for (const [mId, amt] of sourceMap.entries()) {
+    if (amt > bestAmt) {
+      bestAmt = amt;
+      bestId = mId;
+    }
+  }
+  return bestId || fallbackPayerId;
+}
+
 function buildDrinkingSplitRows(params: {
   sessionId: string;
   dateStr: string;
@@ -972,6 +999,7 @@ function buildDrinkingSplitRows(params: {
   attendeeCount: number;
   attendanceRows: Attendance[];
   itemsToSave: SessionItem[];
+  primaryPayerId: string;
 } {
   const {
     sessionId,
@@ -1004,6 +1032,8 @@ function buildDrinkingSplitRows(params: {
     amount: Math.max(0, Math.round(Number(it.amount) || 0)),
   }));
 
+  const primaryPayerId = resolvePrimaryDrinkingPayer(itemsToSave, payerId);
+
   const attendanceRows: Attendance[] = split.splits.map((sp, idx) => {
     const member = membersMap.get(sp.memberId);
     return {
@@ -1015,7 +1045,7 @@ function buildDrinkingSplitRows(params: {
       member_name: member?.name || sp.memberId,
       member_type_snapshot: member?.type === 'GUEST' ? 'GUEST' : 'MAIN',
       fee_amount: sp.perPersonAmount,
-      creditor_id: payerId || '',
+      creditor_id: primaryPayerId || '',
       contributed_amount: sp.contributedAmount,
       net_amount: sp.netAmount,
       is_paid: sp.isPaid,
@@ -1031,6 +1061,7 @@ function buildDrinkingSplitRows(params: {
     attendeeCount: attendanceRows.length,
     attendanceRows,
     itemsToSave,
+    primaryPayerId,
   };
 }
 
@@ -1159,6 +1190,7 @@ export function planCreateSession(
     attendeeCount = split.attendeeCount;
     attendanceRows = split.attendanceRows;
     itemsToSave = split.itemsToSave;
+    payerId = split.primaryPayerId;
   }
 
   const resolvedPayerId =
@@ -1369,6 +1401,7 @@ export function planUpdateSession(
   );
 
   let totalAmount = Math.max(0, Math.round(Number(payload.totalAmount ?? oldSession.total_amount) || 0));
+  let resolvedDrinkPayerId = payerId;
   let perPerson = 0;
   let attendeeCount = attendeeIds.length;
   let attendanceRows: Attendance[] = [];
@@ -1448,10 +1481,13 @@ export function planUpdateSession(
     attendeeCount = split.attendeeCount;
     attendanceRows = split.attendanceRows;
     itemsToSave = split.itemsToSave;
+    resolvedDrinkPayerId = split.primaryPayerId;
   }
 
   const resolvedPayerId =
-    sessionType === 'BADMINTON' && billingMode !== 'AD_HOC' ? treasurerId || payerId : payerId;
+    sessionType === 'BADMINTON' && billingMode !== 'AD_HOC'
+      ? treasurerId || payerId
+      : resolvedDrinkPayerId;
   const updatedSession: Session = {
     ...oldSession,
     date: dateStr,

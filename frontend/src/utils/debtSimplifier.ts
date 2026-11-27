@@ -113,12 +113,6 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
     }
   };
 
-  const mergeEdgeBreakdown = (srcFrom: string, srcTo: string, dstFrom: string, dstTo: string) => {
-    const items = breakdownByEdge.get(`${srcFrom}|${srcTo}`);
-    if (!items) return;
-    for (const item of items) addEdgeBreakdown(dstFrom, dstTo, item);
-  };
-
   const cancelOpposites = () => {
     const pairs: Array<[string, string]> = [];
     for (const [u, targets] of edgeMap.entries()) {
@@ -375,12 +369,14 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
       }
 
       const m = Math.min(chosenA.amount, chosenC.amount);
+      const abBreakdowns = [...(breakdownByEdge.get(`${chosenA.aNode}|${bNode}`) || [])];
       setEdge(chosenA.aNode, bNode, chosenA.amount - m);
       setEdge(bNode, chosenC.cNode, chosenC.amount - m);
       if (chosenA.aNode !== chosenC.cNode) {
         addEdge(chosenA.aNode, chosenC.cNode, m);
-        mergeEdgeBreakdown(chosenA.aNode, bNode, chosenA.aNode, chosenC.cNode);
-        mergeEdgeBreakdown(bNode, chosenC.cNode, chosenA.aNode, chosenC.cNode);
+        for (const item of abBreakdowns) {
+          addEdgeBreakdown(chosenA.aNode, chosenC.cNode, item);
+        }
       }
       cancelOpposites();
       reduced = true;
@@ -458,15 +454,22 @@ export function simplifyDebts(input: SimplifyDrinkingDebtsInput): SimplifiedDebt
     totalOutstanding += edge.amount;
   }
 
-  const transferCountByDebtor = new Map<string, number>();
+  const debtorSessionTransferCounts = new Map<string, number>();
   for (const tr of transfers) {
-    transferCountByDebtor.set(
-      tr.fromMember.member_id,
-      (transferCountByDebtor.get(tr.fromMember.member_id) || 0) + 1
-    );
+    const seenSessions = new Set<string>();
+    for (const b of tr.breakdownSessions) {
+      if (b.sessionId && !seenSessions.has(b.sessionId)) {
+        seenSessions.add(b.sessionId);
+        const key = `${tr.fromMember.member_id}|${b.sessionId}`;
+        debtorSessionTransferCounts.set(key, (debtorSessionTransferCounts.get(key) || 0) + 1);
+      }
+    }
   }
   for (const tr of transfers) {
-    if ((transferCountByDebtor.get(tr.fromMember.member_id) || 0) > 1) {
+    const hasSplitSession = tr.breakdownSessions.some(
+      (b) => (debtorSessionTransferCounts.get(`${tr.fromMember.member_id}|${b.sessionId}`) || 0) > 1
+    );
+    if (hasSplitSession) {
       tr.isSplitFromMultipleTransfers = true;
     }
   }

@@ -1287,10 +1287,11 @@ function computeDebtsData() {
 
     if (sType === 'DRINKING') {
       var dSid = String(a.session_id || '').trim();
+      var dSessObj = sessionsMap[dSid];
       var rawNet = toInt_(a.net_amount, 0);
       var feeAmt = toInt_(a.fee_amount, 0);
       var contribAmt = toInt_(a.contributed_amount, 0);
-      var cId = String(a.creditor_id || '').trim();
+      var cId = String(a.creditor_id || (dSessObj && dSessObj.payer_id) || '').trim();
 
       if (!drinkingAttsBySession[dSid]) drinkingAttsBySession[dSid] = [];
       drinkingAttsBySession[dSid].push({
@@ -2732,6 +2733,33 @@ function resolveQuickNewGuests_(rawNewGuests, rawPaidImmediate, now) {
   };
 }
 
+function resolvePrimaryDrinkingPayer_(items, fallbackPayerId) {
+  var billTotals = {};
+  var anyTotals = {};
+  var hasBill = false;
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var amt = Math.max(0, toInt_(it.amount, 0));
+    var mId = String(it.member_id || '').trim();
+    if (!mId || amt <= 0) continue;
+    anyTotals[mId] = (anyTotals[mId] || 0) + amt;
+    if (String(it.kind || '').trim().toUpperCase() === 'BILL') {
+      billTotals[mId] = (billTotals[mId] || 0) + amt;
+      hasBill = true;
+    }
+  }
+  var src = hasBill ? billTotals : anyTotals;
+  var bestId = '';
+  var bestAmt = -1;
+  for (var id in src) {
+    if (Object.prototype.hasOwnProperty.call(src, id) && src[id] > bestAmt) {
+      bestAmt = src[id];
+      bestId = id;
+    }
+  }
+  return bestId || fallbackPayerId;
+}
+
 function buildDrinkingSplitRows_(sessionId, dateStr, attendeeIds, rawItems, payerId, totalAmountFallback, roundingUnit, membersMap, now) {
   var contributedByMember = {};
   var computedTotal = 0;
@@ -2766,6 +2794,8 @@ function buildDrinkingSplitRows_(sessionId, dateStr, attendeeIds, rawItems, paye
       amount: totalAmountFallback
     });
   }
+
+  var primaryPayerId = resolvePrimaryDrinkingPayer_(itemsToSave, payerId);
 
   // Đảm bảo người góp món cũng nằm trong danh sách tính chia
   var seen = {};
@@ -2807,7 +2837,7 @@ function buildDrinkingSplitRows_(sessionId, dateStr, attendeeIds, rawItems, paye
       member_id: id,
       member_type_snapshot: m && m.type === 'GUEST' ? 'GUEST' : 'MAIN',
       fee_amount: perPerson,
-      creditor_id: payerId || '',
+      creditor_id: primaryPayerId || '',
       contributed_amount: contrib,
       net_amount: netAmt,
       is_paid: netAmt === 0,
@@ -2829,7 +2859,8 @@ function buildDrinkingSplitRows_(sessionId, dateStr, attendeeIds, rawItems, paye
     perPersonAmount: perPerson,
     attendeeCount: participantIds.length,
     attendanceRows: attendanceRows,
-    itemsToSave: itemsToSave
+    itemsToSave: itemsToSave,
+    primaryPayerId: primaryPayerId
   };
 }
 
@@ -2977,6 +3008,7 @@ function createSessionRecord(payload, editorEmail) {
     attendeeCount = split.attendeeCount;
     attendanceRows = split.attendanceRows;
     itemsToSave = split.itemsToSave;
+    payerId = split.primaryPayerId;
   }
 
   var sessionObj = {
@@ -3279,6 +3311,7 @@ function updateSessionRecord(payload, editorEmail) {
     attendeeCount = split.attendeeCount;
     attendanceRows = split.attendanceRows;
     itemsToSave = split.itemsToSave;
+    payerId = split.primaryPayerId;
   }
 
   deleteRowsByCondition_('Attendance', function (row) {

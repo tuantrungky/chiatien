@@ -185,9 +185,13 @@ export function DebtsAndSessionsPage({
     return map;
   }, [debts]);
 
+  const memberNameById = useMemo(
+    () => new Map((bootstrap?.members || []).map((m) => [m.member_id, m.name])),
+    [bootstrap?.members]
+  );
+
   const sessionPayerOptions = useMemo(() => {
     const map = new Map<string, { id: string; name: string; count: number }>();
-    const membersMap = new Map((bootstrap?.members || []).map((m) => [m.member_id, m.name]));
     for (const s of sessions) {
       if (!s.payer_id) continue;
       const existing = map.get(s.payer_id);
@@ -196,13 +200,13 @@ export function DebtsAndSessionsPage({
       } else {
         map.set(s.payer_id, {
           id: s.payer_id,
-          name: s.payer_name || membersMap.get(s.payer_id) || s.payer_id,
+          name: s.payer_name || memberNameById.get(s.payer_id) || s.payer_id,
           count: 1,
         });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
-  }, [sessions, bootstrap?.members]);
+  }, [sessions, memberNameById]);
 
   const sessionDateOptions = useMemo(() => {
     const dayMap = new Map<string, number>();
@@ -1429,10 +1433,16 @@ export function DebtsAndSessionsPage({
                               </span>
                             </div>
                             <h3 className="text-sm font-bold text-slate-900 mt-1">{s.title}</h3>
-                            {!isBadminton && (s.payer_name || s.payer_id) && (
-                              <p className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 mt-0.5">
+                            {(!isBadminton || s.billing_mode === 'AD_HOC') && (s.payer_name || s.payer_id) && (
+                              <p
+                                className={`inline-flex items-center gap-1 text-xs font-semibold mt-0.5 ${
+                                  isBadminton ? 'text-sky-700' : 'text-orange-700'
+                                }`}
+                              >
                                 <UserCheck className="w-3.5 h-3.5 shrink-0" />
-                                <span>Người ứng tiền: {s.payer_name || s.payer_id}</span>
+                                <span>
+                                  Người ứng tiền: {s.payer_name || memberNameById.get(s.payer_id) || s.payer_id}
+                                </span>
                               </p>
                             )}
                             {s.receipt_summary && (
@@ -1595,7 +1605,7 @@ export function DebtsAndSessionsPage({
                                 <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 text-xs text-slate-700">
                                   Người ứng tiền bữa nhậu:{' '}
                                   <span className="font-bold text-orange-700">
-                                    {s.payer_name || s.payer_id}
+                                    {s.payer_name || memberNameById.get(s.payer_id) || s.payer_id}
                                   </span>
                                 </div>
                               ) : null

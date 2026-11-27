@@ -196,6 +196,8 @@ describe('debtSimplifier (Tách biệt Cầu lông & Ăn nhậu)', () => {
     expect(result.transfers[0].fromMember.member_id).toBe('MEM_001');
     expect(result.transfers[0].toMember.member_id).toBe('MEM_003');
     expect(result.transfers[0].amount).toBe(100000);
+    expect(result.transfers[0].breakdownSessions).toHaveLength(1);
+    expect(result.transfers[0].breakdownSessions[0].sessionId).toBe('SES_D1');
   });
 
   it('Cộng dồn nhiều buổi ăn nhậu có góp món và thanh toán một phần', () => {
@@ -435,6 +437,7 @@ describe('debtSimplifier (Tách biệt Cầu lông & Ăn nhậu)', () => {
     // Phải ra đúng 9 lệnh chuyển (3 lệnh 250k về Chung + 6 lệnh 159k về Thảo), không bị tách 45k/114k
     expect(res.transfers).toHaveLength(9);
     expect(res.totalOutstanding).toBe(750000 + 954000);
+    expect(res.transfers.every((t) => !t.isSplitFromMultipleTransfers)).toBe(true);
 
     const toChung = res.transfers.filter((t) => t.toMember.member_id === 'MEM_CHUNG');
     const toThao = res.transfers.filter((t) => t.toMember.member_id === 'MEM_001');

@@ -94,6 +94,8 @@ describe('domainEngine - SheetService.gs Parity', () => {
     );
 
     expect(plan.result.attendances).toHaveLength(3);
+    expect(plan.result.session.payer_id).toBe('MEM_003');
+    expect(plan.result.session.payer_name).toBe('Chung');
     const netSum = plan.result.attendances.reduce((s, a) => s + a.net_amount, 0);
     expect(netSum).toBe(0);
   });

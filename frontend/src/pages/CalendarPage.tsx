@@ -618,8 +618,11 @@ export function CalendarPage({
                       </div>
                       <p className="text-[11px] text-slate-500">
                         {s.attendee_count} người tham gia
-                        {s.type === 'DRINKING' && (s.payer_name || s.payer_id)
-                          ? ` • Người ứng tiền: ${s.payer_name || s.payer_id}`
+                        {(s.type === 'DRINKING' || (s.type === 'BADMINTON' && s.billing_mode === 'AD_HOC')) &&
+                        (s.payer_name || s.payer_id)
+                          ? ` • Người ứng tiền: ${
+                              s.payer_name || membersMap.get(s.payer_id)?.name || s.payer_id
+                            }`
                           : ''}
                       </p>
                     </div>
